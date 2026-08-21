@@ -243,8 +243,15 @@ class Machine extends formae.Resource {
     /// Environment variables baked into the machine config. These are visible
     /// in state and in `fly machine status` — put anything sensitive in
     /// `FLY::Apps::Secrets` instead, which the platform injects at boot.
+    ///
+    /// An entry may be a `formae.Resolvable`, so a non-secret identifier from
+    /// another resource (or another plugin) can be wired in directly:
+    ///   ["SUPABASE_PROJECT_REF"] = db.res.id
+    /// formae orders the graph from that reference and substitutes the value at
+    /// apply time. A resolvable is a handle, not a string: pass it as a whole
+    /// value, never interpolated into one.
     @formae.FieldHint {}
-    env: Mapping<String, String>?
+    env: Mapping<String, (String|formae.Resolvable)>?
 
     /// CPU and memory sizing.
     @formae.FieldHint { hasProviderDefault = true }
@@ -474,8 +481,15 @@ class Secrets extends formae.Resource {
     /// a Mapping's value type. So on formae 0.89.0 a map-valued field cannot be
     /// marked opaque as a whole. Verified against the rendered schema Hints.
     /// `writeOnly` still applies and keeps the field out of drift detection.
+    /// An entry may also be a `formae.Resolvable`, which is what makes
+    /// cross-plugin wiring work: a credential produced by another plugin in the
+    /// same apply can be handed straight to Fly.
+    ///   ["SUPABASE_SECRET_KEY"] = secretKey.res.apiKey
+    /// formae orders the graph from the reference and substitutes the value at
+    /// apply time, so the credential never appears in this forma. A resolvable
+    /// is a handle, not a string — pass it whole, never interpolated.
     @formae.FieldHint { writeOnly = true }
-    values: Mapping<String, (String|formae.Value)>?
+    values: Mapping<String, (String|formae.Value|formae.Resolvable)>?
 }
 
 // =============================================================================

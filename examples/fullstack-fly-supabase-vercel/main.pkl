@@ -1,0 +1,328 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ *
+ * A three-tier application across three providers, in one apply.
+ *
+ *   Supabase  Postgres + auth                          (the data tier)
+ *   Fly.io    a container serving the API               (the backend tier)
+ *   Vercel    a Next.js frontend                        (the frontend tier)
+ *
+ * The point is not that three plugins exist. It is that the *wiring* between
+ * them is declared once, here, and formae works out the order:
+ *
+ *   Supabase project ─┬─> secret key ──> Fly secret ──> Fly machine
+ *                     └─> publishable key ───────────> Vercel env var
+ *   Fly app ────────────────────────────────────────-> Vercel env var
+ *
+ * Nobody copies a connection string out of one dashboard and into another, and
+ * no credential appears in this file. Every cross-provider value is a
+ * resolvable — `db.res.id`, `secretKey.res.apiKey`, `api.res.name` — which is a
+ * handle, not a value. formae builds the dependency graph from those handles and
+ * substitutes the real values at apply time.
+ *
+ * A resolvable cannot be interpolated into a string. That is why this forma
+ * passes *identifiers* across provider boundaries and lets each service compose
+ * its own URLs at runtime — the backend builds its Postgres DSN from the project
+ * ref and password, the frontend builds the API URL from the Fly app name. It is
+ * also the honest shape: a hostname assembled at deploy time is a hostname that
+ * cannot go stale.
+ *
+ * ---------------------------------------------------------------------------
+ * Setup
+ * ---------------------------------------------------------------------------
+ *
+ *   export FLY_API_TOKEN=$(fly auth token)
+ *   export FLY_ORG=<fly org slug, or "personal">
+ *   export SUPABASE_ACCESS_TOKEN=sbp_...          # supabase.com/dashboard/account/tokens
+ *   export SUPABASE_ORGANIZATION_ID=<org id>      # supabase.com/dashboard/org/_/general
+ *   export SUPABASE_DB_PASS=<postgres password>   # >= 8 chars, see the note below
+ *   export VERCEL_TOKEN=...                       # vercel.com/account/settings/tokens
+ *   export APP_SLUG=<globally-unique name>        # Fly app names are global
+ *
+ *   formae apply --mode reconcile --watch examples/fullstack-fly-supabase-vercel/main.pkl
+ *
+ * Supabase project create takes ~2-3 minutes and the Fly machine another 5-90
+ * seconds; --watch shows both. Tear down with:
+ *
+ *   formae destroy examples/fullstack-fly-supabase-vercel/main.pkl
+ *
+ * ---------------------------------------------------------------------------
+ * This costs money
+ * ---------------------------------------------------------------------------
+ *
+ * A Supabase project is a real database (the free plan allows two per
+ * organisation, and `plan = "free"` keeps it there). A Fly machine bills per
+ * second while it runs — this uses the cheapest guest Fly offers,
+ * shared-cpu-1x with 256 MB. A Vercel Hobby project is free.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@fly/core/fly.pkl"
+import "@supabase/supabase.pkl"
+import "@vercel/core/vercel.pkl"
+
+// ---------------------------------------------------------------------------
+// Inputs
+// ---------------------------------------------------------------------------
+
+local flyOrg = read("env:FLY_ORG")
+local supabaseOrg = read("env:SUPABASE_ORGANIZATION_ID")
+
+// Fly app names are unique across all of Fly.io, so this has to be yours.
+local appSlug = read?("env:APP_SLUG") ?? "formae-fullstack-demo"
+
+local flyRegion = read?("env:FLY_REGION_OVERRIDE") ?? "fra"
+local supabaseRegion = read?("env:SUPABASE_REGION") ?? "eu-central-1"
+
+// The Postgres password is read from the environment rather than generated with
+// `random.password(...).setOnce`, and that is deliberate: it has to be *the same
+// value* in two places — Supabase's `dbPass` and the Fly secret the backend
+// reads. `setOnce` is scoped per resource field, so two `setOnce` expressions
+// would generate two different passwords and the backend would silently fail to
+// connect. Reading one env var makes them provably equal.
+//
+// `.opaque` still applies at both ends, so the value is hashed at rest and never
+// printed — and it is not in this file either way.
+local dbPassword = read("env:SUPABASE_DB_PASS")
+
+// Container image for the backend. Replace with your own API image; the default
+// is Fly's demo image, which serves HTTP on 8080 and proves the wiring reaches a
+// running machine.
+local apiImage = read?("env:API_IMAGE") ?? "flyio/hellofly:latest"
+
+// ---------------------------------------------------------------------------
+// Data tier — Supabase
+// ---------------------------------------------------------------------------
+
+local db = new supabase.Project {
+  label = "app-database"
+  name = "\(appSlug)-db"
+  organizationId = supabaseOrg
+  region = supabaseRegion
+  dbPass = formae.value(dbPassword).opaque
+  plan = "free"
+
+  // Where Supabase Auth sends users back to after a magic link or OAuth round
+  // trip. It has to be the frontend's origin, which for a Hobby project is
+  // https://<project-name>.vercel.app.
+  auth = new supabase.ProjectAuthConfig {
+    settings = new Mapping {
+      ["site_url"] = "https://\(appSlug).vercel.app"
+    }
+  }
+}
+
+// Browser-safe key. This one is allowed to reach the client bundle.
+local publishableKey = new supabase.APIKey {
+  label = "frontend-publishable-key"
+  projectRef = db.res.id
+  apikey_type = "publishable"
+  name = "vercel_frontend"
+  description = "Browser-safe key for the Vercel frontend"
+}
+
+// Server-side key. Must never reach a NEXT_PUBLIC_ variable — Vercel exposes
+// those to the client bundle. It goes to Fly, as a secret, and nowhere else.
+local secretKey = new supabase.APIKey {
+  label = "backend-secret-key"
+  projectRef = db.res.id
+  apikey_type = "secret"
+  name = "fly_backend"
+  description = "Server-side key for the Fly.io API"
+}
+
+// ---------------------------------------------------------------------------
+// Backend tier — Fly.io
+// ---------------------------------------------------------------------------
+
+local api = new fly.App {
+  label = "api-app"
+  name = "\(appSlug)-api"
+  org = flyOrg
+}
+
+// Fly injects these into the machine's environment at boot. Both entries cross a
+// provider boundary: the password as an opaque formae value, the secret key as a
+// resolvable formae substitutes at apply time. Neither appears in this forma, and
+// `values` is write-only so neither is diffed on later syncs.
+//
+// The backend composes its DSN at runtime:
+//   postgresql://postgres:$SUPABASE_DB_PASSWORD@db.$SUPABASE_PROJECT_REF.supabase.co:5432/postgres
+local apiSecrets = new fly.Secrets {
+  label = "api-secrets"
+  appName = api.res.name
+  values {
+    ["SUPABASE_DB_PASSWORD"] = formae.value(dbPassword).opaque
+    ["SUPABASE_SECRET_KEY"] = secretKey.res.apiKey
+  }
+}
+
+local machine = new fly.Machine {
+  label = "api-machine"
+
+  // Referencing the Secrets bag rather than the App directly is the whole
+  // point: Fly injects secrets into a machine's environment *at boot*, and a
+  // machine that boots before its secrets exist comes up without them and stays
+  // that way until it restarts. `apiSecrets.res.appName` resolves to the same
+  // app name, and it makes formae order App -> Secrets -> Machine instead of
+  // creating the machine and the secrets concurrently.
+  appName = apiSecrets.res.appName
+
+  name = "api"
+  region = flyRegion
+  image = apiImage
+
+  // Cheapest guest Fly offers. Machines bill by the second.
+  guest = new fly.MachineGuest {
+    cpuKind = "shared"
+    cpus = 1
+    memoryMb = 256
+  }
+
+  // Not a secret — a project ref is a public identifier, and env is the right
+  // place for it. Wired as a resolvable so formae creates the database first.
+  env {
+    ["SUPABASE_PROJECT_REF"] = db.res.id
+    ["PORT"] = "8080"
+  }
+
+  services {
+    new fly.MachineService {
+      internalPort = 8080
+      protocol = "tcp"
+      // fly-proxy stops this machine when it goes idle and starts it again on
+      // the next request, so an API with no traffic costs nothing. The plugin
+      // does not reconcile `state`, precisely so it does not fight that.
+      autostart = true
+      autostop = "stop"
+      ports {
+        new fly.MachinePort {
+          port = 443
+          handlers { "tls"; "http" }
+        }
+        new fly.MachinePort {
+          port = 80
+          handlers { "http" }
+          forceHttps = true
+        }
+      }
+    }
+  }
+}
+
+// Without an IP assignment the app is unreachable from the internet no matter
+// how many machines and services it has: `fly deploy` allocates one implicitly,
+// the raw Machines API does not. shared_v4 and v6 are free.
+local apiIPv4 = new fly.IPAddress {
+  label = "api-ipv4"
+  appName = api.res.name
+  addressType = "shared_v4"
+}
+
+local apiIPv6 = new fly.IPAddress {
+  label = "api-ipv6"
+  appName = api.res.name
+  addressType = "v6"
+}
+
+// ---------------------------------------------------------------------------
+// Frontend tier — Vercel
+// ---------------------------------------------------------------------------
+
+local site = new vercel.Project {
+  label = "app-frontend"
+  name = appSlug
+  framework = "nextjs"
+
+  // Uncomment to have pushes deploy automatically. Immutable once set: changing
+  // it replaces the project.
+  //
+  // gitRepository = new vercel.GitRepository {
+  //   type = "github"
+  //   repo = "your-org/your-app"
+  // }
+}
+
+local allTargets = new Listing { "production"; "preview"; "development" }
+
+forma {
+  new formae.Stack {
+    label = "fullstack-fly-supabase-vercel"
+    description = "Supabase Postgres, a Fly.io API, and a Vercel frontend wired together"
+  }
+
+  // One target per namespace. Each plugin reads its own credentials from the
+  // environment; no token appears here.
+  new formae.Target {
+    label = "fly"
+    config = new fly.Config {
+      org = read("env:FLY_ORG")
+      region = read?("env:FLY_REGION_OVERRIDE") ?? "fra"
+    }
+  }
+
+  new formae.Target {
+    label = "supabase"
+    config = new supabase.Config {}
+  }
+
+  new formae.Target {
+    label = "vercel"
+    config = new vercel.Config {}
+  }
+
+  // Data tier
+  db
+  publishableKey
+  secretKey
+
+  // Backend tier
+  api
+  apiSecrets
+  machine
+  apiIPv4
+  apiIPv6
+
+  // Frontend tier ------------------------------------------------------------
+
+  // Which Fly app serves the API. The frontend builds the URL from it:
+  // https://${NEXT_PUBLIC_API_APP}.fly.dev — a resolvable is a handle and
+  // cannot be interpolated into a string here, and composing the hostname at
+  // runtime means it cannot go stale.
+  new vercel.EnvironmentVariable {
+    label = "api-app-name"
+    projectId = site.res.id
+    key = "NEXT_PUBLIC_API_APP"
+    value = api.res.name
+    variableType = "plain"
+    targets = allTargets
+  }
+
+  // Which Supabase project, so the frontend can reach
+  // https://<ref>.supabase.co directly for auth.
+  new vercel.EnvironmentVariable {
+    label = "supabase-project-ref"
+    projectId = site.res.id
+    key = "NEXT_PUBLIC_SUPABASE_PROJECT_REF"
+    value = db.res.id
+    variableType = "plain"
+    targets = allTargets
+  }
+
+  // The browser-safe key. `encrypted` round-trips through the Vercel API, so
+  // formae sees no drift on later syncs; `sensitive` would never be readable
+  // again and would drift on every one.
+  new vercel.EnvironmentVariable {
+    label = "supabase-anon-key"
+    projectId = site.res.id
+    key = "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+    value = publishableKey.res.apiKey
+    variableType = "encrypted"
+    targets = allTargets
+  }
+
+  site
+}

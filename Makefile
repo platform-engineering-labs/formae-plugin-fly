@@ -17,6 +17,16 @@ GO := go
 GOFLAGS := -trimpath
 BINARY := $(PLUGIN_NAME)
 
+# Conformance timeout in minutes. Override with TIMEOUT=15 for machine tests.
+DEFAULT_TIMEOUT := 30
+
+# Formae agent version the conformance harness runs against. Unset means "the
+# latest published release", which is what CI should use. Pin it with
+# VERSION=0.88.1 to reproduce a specific run. Note the harness rewrites the
+# schema and testdata PklProject files to match this version for the duration of
+# the run, then restores them.
+CONFORMANCE_VERSION := $(if $(VERSION),FORMAE_VERSION=$(VERSION),)
+
 # Installation paths
 # Plugin discovery expects lowercase directory names matching the plugin name
 PLUGIN_BASE_DIR := $(HOME)/.pel/formae/plugins
@@ -97,19 +107,29 @@ clean-environment:
 	@./scripts/ci/clean-environment.sh
 
 ## conformance-test: Run all conformance tests (CRUD + discovery)
-## Usage: make conformance-test [TEST=s3-bucket] [TIMEOUT=30m]
+## Usage: make conformance-test [TEST=machine] [TIMEOUT=15] [VERSION=0.88.1]
+##
+## TIMEOUT is in MINUTES, matching the convention the other plugins and the
+## docs use. It sets the go-test deadline (with an "m" appended) and also
+## propagates as FORMAE_TEST_TIMEOUT, which the harness reads in minutes for
+## its per-command polling deadline. Passing "15m" here would be rejected by
+## `go test -timeout 15mm`.
+##
+## Machine creates are async (image pull + boot), so use TIMEOUT=15 for anything
+## touching FLY::Apps::Machine.
 ## Calls clean-environment before and after tests.
 conformance-test: conformance-test-crud conformance-test-discovery
 
 ## conformance-test-crud: Run only CRUD lifecycle tests
-## Usage: make conformance-test-crud [TEST=s3-bucket] [TIMEOUT=30m]
+## Usage: make conformance-test-crud [TEST=machine] [TIMEOUT=15]
 conformance-test-crud: install
 	@echo "Pre-test cleanup..."
 	@./scripts/ci/clean-environment.sh || true
 	@echo ""
 	@echo "Running CRUD conformance tests..."
-	@FORMAE_TEST_FILTER="$(TEST)" FORMAE_TEST_TYPE=crud \
-		$(GO) test -tags=conformance -v -timeout $(or $(TIMEOUT),30m) ./...; \
+	@$(CONFORMANCE_VERSION) FORMAE_TEST_FILTER="$(TEST)" FORMAE_TEST_TYPE=crud \
+		FORMAE_TEST_TIMEOUT="$(or $(TIMEOUT),$(DEFAULT_TIMEOUT))" \
+		$(GO) test -tags=conformance -v -timeout $(or $(TIMEOUT),$(DEFAULT_TIMEOUT))m ./...; \
 	TEST_EXIT=$$?; \
 	echo ""; \
 	echo "Post-test cleanup..."; \
@@ -117,14 +137,15 @@ conformance-test-crud: install
 	exit $$TEST_EXIT
 
 ## conformance-test-discovery: Run only discovery tests
-## Usage: make conformance-test-discovery [TEST=s3-bucket] [TIMEOUT=30m]
+## Usage: make conformance-test-discovery [TEST=machine] [TIMEOUT=15]
 conformance-test-discovery: install
 	@echo "Pre-test cleanup..."
 	@./scripts/ci/clean-environment.sh || true
 	@echo ""
 	@echo "Running discovery conformance tests..."
-	@FORMAE_TEST_FILTER="$(TEST)" FORMAE_TEST_TYPE=discovery \
-		$(GO) test -tags=conformance -v -timeout $(or $(TIMEOUT),30m) ./...; \
+	@$(CONFORMANCE_VERSION) FORMAE_TEST_FILTER="$(TEST)" FORMAE_TEST_TYPE=discovery \
+		FORMAE_TEST_TIMEOUT="$(or $(TIMEOUT),$(DEFAULT_TIMEOUT))" \
+		$(GO) test -tags=conformance -v -timeout $(or $(TIMEOUT),$(DEFAULT_TIMEOUT))m ./...; \
 	TEST_EXIT=$$?; \
 	echo ""; \
 	echo "Post-test cleanup..."; \

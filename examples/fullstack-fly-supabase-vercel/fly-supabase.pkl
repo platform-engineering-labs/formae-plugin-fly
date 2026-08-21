@@ -1,0 +1,169 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ *
+ * The same application without the frontend tier: Supabase Postgres and a
+ * Fly.io API, wired together.
+ *
+ * This exists so the example is demonstrable with two providers instead of
+ * three — no Vercel account, no VERCEL_TOKEN. The Supabase-to-Fly wiring is
+ * byte-for-byte what main.pkl does; the only thing missing is the Vercel
+ * project and its three environment variables.
+ *
+ * Use main.pkl for the whole stack. Use this one to see the cross-plugin
+ * mechanism on its own, or when you only have two of the three accounts.
+ *
+ * ---------------------------------------------------------------------------
+ * Setup
+ * ---------------------------------------------------------------------------
+ *
+ *   export FLY_API_TOKEN=$(fly auth token)
+ *   export FLY_ORG=<fly org slug, or "personal">
+ *   export SUPABASE_ACCESS_TOKEN=sbp_...
+ *   export SUPABASE_ORGANIZATION_ID=<org id>
+ *   export SUPABASE_DB_PASS=<postgres password, >= 8 chars>
+ *   export APP_SLUG=<globally-unique name>
+ *
+ *   formae apply --mode reconcile --watch examples/fullstack-fly-supabase-vercel/fly-supabase.pkl
+ *
+ * Costs money: a Supabase project is a real database, and the Fly machine bills
+ * per second while it runs. Tear down with `formae destroy` on the same file.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@fly/core/fly.pkl"
+import "@supabase/supabase.pkl"
+
+local flyOrg = read("env:FLY_ORG")
+local supabaseOrg = read("env:SUPABASE_ORGANIZATION_ID")
+local appSlug = read?("env:APP_SLUG") ?? "formae-fullstack-demo"
+local flyRegion = read?("env:FLY_REGION_OVERRIDE") ?? "fra"
+local supabaseRegion = read?("env:SUPABASE_REGION") ?? "eu-central-1"
+local apiImage = read?("env:API_IMAGE") ?? "flyio/hellofly:latest"
+
+// Read from the environment, not generated: the same value has to reach both
+// Supabase's dbPass and the Fly secret the backend reads, and `setOnce` is
+// scoped per resource field — two setOnce expressions would generate two
+// different passwords. `.opaque` still applies at both ends.
+local dbPassword = read("env:SUPABASE_DB_PASS")
+
+local db = new supabase.Project {
+  label = "app-database"
+  name = "\(appSlug)-db"
+  organizationId = supabaseOrg
+  region = supabaseRegion
+  dbPass = formae.value(dbPassword).opaque
+  plan = "free"
+}
+
+// Server-side key. Goes to Fly as a secret and nowhere else.
+local secretKey = new supabase.APIKey {
+  label = "backend-secret-key"
+  projectRef = db.res.id
+  apikey_type = "secret"
+  name = "fly_backend"
+  description = "Server-side key for the Fly.io API"
+}
+
+local api = new fly.App {
+  label = "api-app"
+  name = "\(appSlug)-api"
+  org = flyOrg
+}
+
+local apiSecrets = new fly.Secrets {
+  label = "api-secrets"
+  appName = api.res.name
+  values {
+    ["SUPABASE_DB_PASSWORD"] = formae.value(dbPassword).opaque
+    ["SUPABASE_SECRET_KEY"] = secretKey.res.apiKey
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "fly-supabase"
+    description = "Supabase Postgres and a Fly.io API, wired together"
+  }
+
+  new formae.Target {
+    label = "fly"
+    config = new fly.Config {
+      org = read("env:FLY_ORG")
+      region = read?("env:FLY_REGION_OVERRIDE") ?? "fra"
+    }
+  }
+
+  new formae.Target {
+    label = "supabase"
+    config = new supabase.Config {}
+  }
+
+  db
+  secretKey
+  api
+  apiSecrets
+
+  new fly.Machine {
+    label = "api-machine"
+
+    // Via the Secrets bag, not the App: Fly injects secrets at boot, so a
+    // machine created before its secrets exist boots without them. This edge
+    // makes formae order App -> Secrets -> Machine.
+    appName = apiSecrets.res.appName
+
+    name = "api"
+    region = flyRegion
+    image = apiImage
+
+    guest = new fly.MachineGuest {
+      cpuKind = "shared"
+      cpus = 1
+      memoryMb = 256
+    }
+
+    // A project ref is a public identifier, so env rather than a secret. The
+    // backend composes its DSN at runtime:
+    //   postgresql://postgres:$SUPABASE_DB_PASSWORD@db.$SUPABASE_PROJECT_REF.supabase.co:5432/postgres
+    env {
+      ["SUPABASE_PROJECT_REF"] = db.res.id
+      ["PORT"] = "8080"
+    }
+
+    services {
+      new fly.MachineService {
+        internalPort = 8080
+        protocol = "tcp"
+        autostart = true
+        autostop = "stop"
+        ports {
+          new fly.MachinePort {
+            port = 443
+            handlers { "tls"; "http" }
+          }
+          new fly.MachinePort {
+            port = 80
+            handlers { "http" }
+            forceHttps = true
+          }
+        }
+      }
+    }
+  }
+
+  // Without an IP assignment the app is unreachable from the internet.
+  // shared_v4 and v6 are free.
+  new fly.IPAddress {
+    label = "api-ipv4"
+    appName = api.res.name
+    addressType = "shared_v4"
+  }
+
+  new fly.IPAddress {
+    label = "api-ipv6"
+    appName = api.res.name
+    addressType = "v6"
+  }
+}

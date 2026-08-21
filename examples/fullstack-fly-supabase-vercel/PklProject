@@ -1,0 +1,22 @@
+// PklProject for the three-plugin full-stack example.
+//
+// None of the three plugin schemas is published to the pkl registry yet, so all
+// three are referenced from local checkouts. That means this example needs the
+// repositories side by side:
+//
+//   plugins/
+//   ├── formae-plugin-fly        <- you are here
+//   ├── formae-plugin-supabase
+//   └── formae-plugin-vercel
+
+amends "pkl:Project"
+
+dependencies {
+  ["fly"] = import("../../schema/pkl/PklProject")
+  ["supabase"] = import("../../../formae-plugin-supabase/schema/pkl/PklProject")
+  ["vercel"] = import("../../../formae-plugin-vercel/schema/pkl/PklProject")
+
+  ["formae"] {
+    uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.89.0"
+  }
+}

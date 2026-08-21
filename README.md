@@ -4,7 +4,16 @@ A [Formae](https://github.com/platform-engineering-labs/formae) plugin for
 [Fly.io](https://fly.io). Manage apps, machines, volumes, secrets, certificates and IP
 addresses as declarative infrastructure.
 
-Namespace `FLY`. Requires formae **0.89.0** or newer.
+Namespace `FLY`. Requires formae **0.84.0** or newer.
+
+That floor is the SDK's own, and it is real rather than asserted: the schema uses only
+`FieldHint` features present in the 0.84.0 Pkl package (`createOnly`, `writeOnly`,
+`requiredOnCreate`, `hasProviderDefault`, `updateMethod = "EntitySet"` with `indexField`,
+`formae.Value`, `formae.Resolvable`), and `schema/pkl/PklProject` pins that version so
+`make verify-schema` proves it on every run. A plugin declaring a higher
+`minFormaeVersion` than the agent is silently *skipped* at load — worth knowing, because
+several sibling plugins currently pin 0.89.0 and therefore do not load against the
+latest published agent (0.88.1).
 
 ---
 
@@ -213,6 +222,16 @@ make conformance-test TEST=secrets                # free, seconds
 make conformance-test TEST=machine TIMEOUT=15     # BILLABLE, async, needs the timeout
 make conformance-test TIMEOUT=15                  # all three
 ```
+
+`TIMEOUT` is in **minutes**, matching the documented convention. The Makefile appends the
+`m` for `go test -timeout` and also exports it as `FORMAE_TEST_TIMEOUT`, which the harness
+reads (in minutes) for its per-command polling deadline — so `TIMEOUT=15m` would be
+rejected as `-timeout 15mm`. `VERSION=0.88.1` pins the agent version the harness downloads;
+leaving it unset takes the latest published release.
+
+The harness rewrites `schema/pkl/PklProject` and `testdata/PklProject` to the agent's
+formae version for the duration of a run, then restores them. That is the compatibility
+check doing its job, not a stray edit.
 
 `make clean-environment` deletes every app in `FLY_ORG` whose name starts with
 `formae-sdk-test-`. Destroying an app cascades to its machines, volumes, secrets,
