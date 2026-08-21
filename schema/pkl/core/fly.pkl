@@ -1,0 +1,96 @@
+/*
+ * Example Formae Plugin Schema
+ *
+ * This file defines the resource types your plugin supports.
+ * Each resource class extends formae.Resource and includes
+ * a ResourceHint annotation with metadata.
+ *
+ * See the AWS plugin for comprehensive examples:
+ * https://github.com/platform-engineering-labs/formae/tree/main/plugins/aws/schema/pkl
+ */
+module fly
+
+import "@formae/formae.pkl"
+
+// =============================================================================
+// Tag - Plain class example
+// =============================================================================
+// Use a plain class (not SubResource) when:
+// - The structure is simple and universal (like key-value pairs)
+// - You manually define output with hidden/fixed pattern
+// - No FieldHints needed
+//
+// Use SubResource when:
+// - The nested object has multiple configurable fields
+// - Fields need FieldHint annotations (createOnly, entitySet, etc.)
+// - You want automatic output transformation via props()/render()
+
+/// Tag for resource identification and organization.
+open class Tag {
+    hidden key: String
+    hidden value: String
+
+    fixed Key: String = key
+    fixed Value: String = value
+}
+
+// =============================================================================
+// Endpoint - SubResource example
+// =============================================================================
+// SubResource provides props() and render() methods for automatic output
+// transformation, and integrates with the schema system for field hints.
+
+/// Network endpoint configuration.
+@formae.SubResourceHint {}
+class Endpoint extends formae.SubResource {
+    /// The endpoint URL
+    @formae.FieldHint {}
+    url: String
+
+    /// The port number
+    @formae.FieldHint {}
+    port: Int = 443
+
+    /// The protocol (http or https)
+    @formae.FieldHint {}
+    protocol: String = "https"
+}
+
+// =============================================================================
+// ExampleResource - Main resource definition
+// =============================================================================
+
+/// ExampleResource demonstrates the structure of a Formae resource.
+/// TODO: Replace with your actual resource definitions.
+@formae.ResourceHint {
+    type = "FLY::Service::Resource"
+    identifier = "$.Id"
+}
+class ExampleResource extends formae.Resource {
+    fixed hidden type: String = "FLY::Service::Resource"
+
+    /// The display name of the resource
+    @formae.FieldHint {}
+    name: String
+
+    /// Optional description
+    @formae.FieldHint {}
+    description: String?
+
+    /// Region cannot be changed after creation (triggers replacement)
+    @formae.FieldHint { createOnly = true }
+    region: String?
+
+    /// Network endpoint configuration (SubResource example)
+    @formae.FieldHint {}
+    endpoint: Endpoint?
+
+    /// Resource tags for identification and organization.
+    /// Uses EntitySet semantics: items are matched by Key for updates.
+    /// See: https://docs.formae.io/plugin-sdk/collection-semantics
+    @formae.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
+    tags: Listing<Tag>?
+}

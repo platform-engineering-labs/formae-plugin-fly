@@ -1,0 +1,54 @@
+/*
+ * Conformance Test: Update Resource (in-place)
+ *
+ * This file modifies mutable fields to trigger an in-place update.
+ * Changes from resource.pkl:
+ *   - name: added "-updated" suffix
+ *   - description: changed text
+ *   - endpoint.port: changed from 8080 to 9090
+ *   - tags: added a new tag
+ *
+ * These fields do NOT have createOnly=true, so formae should update
+ * the resource in place without replacement.
+ */
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@fly/core/fly.pkl"
+
+local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "Plugin SDK conformance test stack"
+  }
+
+  new formae.Target {
+    label = "example-target"
+    namespace = "FLY"
+    config = new Mapping {
+      ["region"] = "us-east-1"
+    }
+  }
+
+  new fly.ExampleResource {
+    label = "plugin-sdk-test-resource"
+    name = "formae-plugin-sdk-test-\(testRunID)-updated"  // CHANGED
+    description = "Test resource - UPDATED"               // CHANGED
+    region = "us-east-1"                                  // unchanged (createOnly)
+
+    endpoint = new fly.Endpoint {
+      url = "https://api.fly.com"
+      port = 9090                                         // CHANGED from 8080
+      protocol = "https"
+    }
+
+    tags = new Listing {
+      new fly.Tag { key = "Environment"; value = "test" }
+      new fly.Tag { key = "ManagedBy"; value = "formae" }
+      new fly.Tag { key = "UpdatedAt"; value = "conformance-test" }  // ADDED
+    }
+  }
+}

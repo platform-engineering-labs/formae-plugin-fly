@@ -1,0 +1,49 @@
+/*
+ * Conformance Test: Create Resource
+ *
+ * This file defines the initial resource state for conformance testing.
+ * The conformance test harness will apply this file first.
+ */
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@fly/core/fly.pkl"
+
+local stackName = "plugin-sdk-test-stack"
+// Read the test run ID from environment variable set by the test harness
+// This ensures consistent naming within a test run but unique names between runs
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "Plugin SDK conformance test stack"
+  }
+
+  new formae.Target {
+    label = "example-target"
+    namespace = "FLY"
+    // TODO: Add your provider-specific configuration
+    config = new Mapping {
+      ["region"] = "us-east-1"
+    }
+  }
+
+  new fly.ExampleResource {
+    label = "plugin-sdk-test-resource"
+    name = "formae-plugin-sdk-test-\(testRunID)"
+    description = "Test resource for plugin SDK conformance tests"
+    region = "us-east-1"
+
+    endpoint = new fly.Endpoint {
+      url = "https://api.fly.com"
+      port = 8080
+      protocol = "https"
+    }
+
+    tags = new Listing {
+      new fly.Tag { key = "Environment"; value = "test" }
+      new fly.Tag { key = "ManagedBy"; value = "formae" }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+amends "pkl:Project"
+
+// Package configuration for local development.
+// Update baseUri and packageZipUrl when publishing to a registry.
+//
+// `version` is read from the sibling VERSION file (gitignored). The Hub build
+// pipeline writes the release version there before `pkl project package`, so
+// the packaged artifact matches the version the pipeline publishes. Hardcoding
+// it makes the artifact diverge from the pipeline's expected path and the
+// publish fails. `make build` / `make verify-schema` write VERSION locally.
+package {
+  name = "fly"
+  baseUri = "package://localhost/plugins/fly/schema/pkl/fly"
+  version = read("VERSION").text.trim()
+  packageZipUrl = "https://localhost/plugins/fly/schema/pkl/fly@\(version).zip"
+}
+
+dependencies {
+  ["formae"] {
+    uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.84.0"
+  }
+}
