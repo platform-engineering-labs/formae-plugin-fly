@@ -1,96 +1,632 @@
 /*
- * Example Formae Plugin Schema
+ * © 2026 Platform Engineering Labs Inc.
  *
- * This file defines the resource types your plugin supports.
- * Each resource class extends formae.Resource and includes
- * a ResourceHint annotation with metadata.
- *
- * See the AWS plugin for comprehensive examples:
- * https://github.com/platform-engineering-labs/formae/tree/main/plugins/aws/schema/pkl
+ * SPDX-License-Identifier: FSL-1.1-ALv2
  */
+
+/// Fly.io resource definitions.
+///
+/// Every type here maps to the Fly.io Machines REST API
+/// (https://api.machines.dev, OpenAPI at https://docs.machines.dev/spec/openapi3.json).
+/// Only resources the plugin actually implements appear in this module — see
+/// docs/RESOURCES.md for the full catalog and what is coming next.
 module fly
 
 import "@formae/formae.pkl"
 
 // =============================================================================
-// Tag - Plain class example
+// Target configuration
 // =============================================================================
-// Use a plain class (not SubResource) when:
-// - The structure is simple and universal (like key-value pairs)
-// - You manually define output with hidden/fixed pattern
-// - No FieldHints needed
-//
-// Use SubResource when:
-// - The nested object has multiple configurable fields
-// - Fields need FieldHint annotations (createOnly, entitySet, etc.)
-// - You want automatic output transformation via props()/render()
 
-/// Tag for resource identification and organization.
-open class Tag {
-    hidden key: String
-    hidden value: String
+/// Deployment-level config for a Fly.io target.
+///
+/// Credentials are NEVER in here. The plugin reads the API token from
+/// FLY_ACCESS_TOKEN, falling back to FLY_API_TOKEN — flyctl's own precedence,
+/// so a token that works with `fly` works here.
+open class Config {
+    hidden fixed type: String = "FLY"
 
-    fixed Key: String = key
-    fixed Value: String = value
+    /// Fly organization slug, or "personal". Required: listing apps
+    /// (GET /v1/apps?org_slug=) and org-wide machine/volume discovery
+    /// (GET /v1/orgs/{slug}/machines) both need it, and it cannot be derived
+    /// from a token.
+    org: String
+
+    /// Default Fly region code for Machines and Volumes that do not name one
+    /// (e.g. "fra", "iad", "ams"). The authoritative list is public and needs
+    /// no auth: GET https://api.machines.dev/v1/platform/regions
+    region: String? = null
+
+    /// Override the API endpoint. Defaults to https://api.machines.dev.
+    /// From inside a Fly WireGuard network, http://_api.internal:4280 works.
+    baseUrl: String? = null
+
+    fixed Type: String = type
+    fixed Org: String = org
+    fixed Region: String? = region
+    fixed BaseUrl: String? = baseUrl
 }
 
 // =============================================================================
-// Endpoint - SubResource example
+// FLY::Apps::App
 // =============================================================================
-// SubResource provides props() and render() methods for automatic output
-// transformation, and integrates with the schema system for field hints.
 
-/// Network endpoint configuration.
-@formae.SubResourceHint {}
-class Endpoint extends formae.SubResource {
-    /// The endpoint URL
-    @formae.FieldHint {}
-    url: String
+/// Resolvable handle for `FLY::Apps::App` outputs. Reference these from child
+/// resources to wire a freshly created app into its machines, secrets, volumes,
+/// certificates and IPs in the same apply, e.g.
+///   appName = api.res.name
+open class AppResolvable extends formae.Resolvable {
+    hidden type = "FLY::Apps::App"
 
-    /// The port number
-    @formae.FieldHint {}
-    port: Int = 443
-
-    /// The protocol (http or https)
-    @formae.FieldHint {}
-    protocol: String = "https"
+    hidden id:   AppResolvable = (this) { property = "id" }
+    hidden name: AppResolvable = (this) { property = "name" }
 }
 
-// =============================================================================
-// ExampleResource - Main resource definition
-// =============================================================================
-
-/// ExampleResource demonstrates the structure of a Formae resource.
-/// TODO: Replace with your actual resource definitions.
+/// A Fly.io app — the namespace every other Fly resource lives in.
+/// Maps to POST /v1/apps.
+///
+/// An app on its own costs nothing; billing starts when a Machine runs inside
+/// it. There is no app-update endpoint, so every field is createOnly: changing
+/// one replaces the app (and everything in it).
 @formae.ResourceHint {
-    type = "FLY::Service::Resource"
-    identifier = "$.Id"
+    type = "FLY::Apps::App"
+    identifier = "$.name"
+    discoverable = true
 }
-class ExampleResource extends formae.Resource {
-    fixed hidden type: String = "FLY::Service::Resource"
+class App extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::App"
 
-    /// The display name of the resource
-    @formae.FieldHint {}
+    local parent = this
+    hidden res: AppResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// App name. Globally unique across all of Fly.io — a collision fails the
+    /// create with HTTP 422 rather than binding to someone else's app.
+    /// This is also the native id.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
     name: String
 
-    /// Optional description
+    /// Organization slug that owns the app, or "personal".
+    ///
+    /// Required on the resource even though the target also carries an `org`:
+    /// the target's value scopes discovery and listing, this one decides where
+    /// the app is created. Being explicit here means an omitted value can never
+    /// be read back from the API as drift.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    org: String
+
+    /// 6PN private network name. Apps in the same network can reach each other
+    /// over .internal DNS. Defaults to the app's own name server-side.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    network: String? = null
+
+    /// Whether to enable *.fly.dev subdomain routing for this app.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    enableSubdomains: Boolean? = null
+
+    /// Fly's internal app id. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    id: String? = null
+
+    /// App status as reported by Fly ("pending", "deployed", "suspended").
+    /// Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    status: String? = null
+}
+
+// =============================================================================
+// FLY::Apps::Machine
+// =============================================================================
+
+/// Guest sizing. `shared-cpu-1x` with 256 MB is `cpuKind = "shared"`,
+/// `cpus = 1`, `memoryMb = 256` — the cheapest thing Fly runs.
+class MachineGuest {
+    /// "shared" or "performance".
+    cpuKind: String? = "shared"
+    /// vCPU count.
+    cpus: Int? = 1
+    /// Memory in MB. Must be a multiple of 256.
+    memoryMb: Int? = 256
+}
+
+/// A published port on a service.
+class MachinePort {
+    /// External port fly-proxy listens on.
+    port: Int
+    /// Connection handlers, in order: "http", "tls", "proxy_proto".
+    handlers: Listing<String>? = null
+    /// Redirect plain HTTP to HTTPS.
+    forceHttps: Boolean? = null
+}
+
+/// A service fly-proxy routes to. Without at least one service (and an
+/// allocated IP address) an app is not reachable from the internet.
+class MachineService {
+    /// Port inside the machine that the process listens on.
+    internalPort: Int
+    /// "tcp" or "udp".
+    protocol: String? = "tcp"
+    /// Published ports.
+    ports: Listing<MachinePort>? = null
+    /// Start the machine on an incoming request when it is stopped.
+    autostart: Boolean? = null
+    /// "off", "stop" or "suspend". Fly stops idle machines when set — see the
+    /// note on `state` below for why the plugin does not fight that.
+    autostop: String? = null
+    /// Keep at least this many machines running regardless of traffic.
+    minMachinesRunning: Int? = null
+}
+
+/// A volume mounted into the machine's filesystem.
+class MachineMount {
+    /// Volume id (`vol_...`) or, when using `name`, left unset.
+    volume: String? = null
+    /// Mount point inside the machine. The EntitySet index — see the FieldHint
+    /// on `mounts`.
+    path: String
+    /// Volume name, as an alternative to a specific volume id.
+    name: String? = null
+}
+
+/// What flyd does when the machine's main process exits.
+class MachineRestart {
+    /// "no", "always", "on-failure" or "spot-price".
+    policy: String? = null
+    /// Cap on restart attempts when policy is "on-failure".
+    maxRetries: Int? = null
+}
+
+/// Resolvable handle for `FLY::Apps::Machine` outputs.
+open class MachineResolvable extends formae.Resolvable {
+    hidden type = "FLY::Apps::Machine"
+
+    hidden id:        MachineResolvable = (this) { property = "id" }
+    hidden privateIp: MachineResolvable = (this) { property = "privateIp" }
+    hidden state:     MachineResolvable = (this) { property = "state" }
+}
+
+/// A Fly Machine — one Firecracker VM running one container image.
+/// Maps to POST /v1/apps/{app}/machines.
+///
+/// Machines bill by the second while they run. Create is async: the API
+/// answers with `state = "created"` and the machine then pulls its image and
+/// boots, so Create returns InProgress and formae polls Status() until the
+/// machine reaches `started`.
+///
+/// Native id is `{appName}/{machineId}` — machine ids are only unique within
+/// an app.
+@formae.ResourceHint {
+    type = "FLY::Apps::Machine"
+    identifier = "$.id"
+    discoverable = true
+}
+class Machine extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::Machine"
+
+    local parent = this
+    hidden res: MachineResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// App that owns this machine. Immutable — a machine cannot move between
+    /// apps.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    appName: String|formae.Resolvable
+
+    /// Machine name. Fly generates one when omitted.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    name: String? = null
+
+    /// Fly region code. Immutable: a machine is pinned to the host its rootfs
+    /// lives on, and there is no move operation. Changing it replaces the
+    /// machine. Falls back to the target's `region` when unset.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    region: String? = null
+
+    /// Docker image to run, e.g. "flyio/hellofly:latest" or a registry.fly.io
+    /// reference.
+    @formae.FieldHint { requiredOnCreate = true }
+    image: String
+
+    /// Environment variables baked into the machine config. These are visible
+    /// in state and in `fly machine status` — put anything sensitive in
+    /// `FLY::Apps::Secrets` instead, which the platform injects at boot.
     @formae.FieldHint {}
-    description: String?
+    env: Mapping<String, String>? = null
 
-    /// Region cannot be changed after creation (triggers replacement)
-    @formae.FieldHint { createOnly = true }
-    region: String?
+    /// CPU and memory sizing.
+    @formae.FieldHint { hasProviderDefault = true }
+    guest: MachineGuest? = null
 
-    /// Network endpoint configuration (SubResource example)
+    /// Services fly-proxy routes to.
     @formae.FieldHint {}
-    endpoint: Endpoint?
+    services: Listing<MachineService>? = null
 
-    /// Resource tags for identification and organization.
-    /// Uses EntitySet semantics: items are matched by Key for updates.
-    /// See: https://docs.formae.io/plugin-sdk/collection-semantics
+    /// Volume mounts, keyed by mount path. EntitySet semantics: items are
+    /// matched by `path` across updates, so reordering the listing is not a
+    /// change and editing one mount does not rewrite the others.
     @formae.FieldHint {
         updateMethod = "EntitySet"
-        indexField = "Key"
+        indexField = "path"
     }
-    tags: Listing<Tag>?
+    mounts: Listing<MachineMount>? = null
+
+    /// Restart policy.
+    @formae.FieldHint { hasProviderDefault = true }
+    restart: MachineRestart? = null
+
+    /// Arbitrary key/value metadata on the machine.
+    @formae.FieldHint {}
+    metadata: Mapping<String, String>? = null
+
+    /// Override the image's entrypoint.
+    @formae.FieldHint {}
+    entrypoint: Listing<String>? = null
+
+    /// Override the image's command.
+    @formae.FieldHint {}
+    cmd: Listing<String>? = null
+
+    /// Destroy the machine once its main process exits. For one-shot jobs.
+    @formae.FieldHint { hasProviderDefault = true }
+    autoDestroy: Boolean? = null
+
+    /// Machine id, e.g. "17811943c9d489". Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    id: String? = null
+
+    /// Current lifecycle state: "created", "starting", "started", "stopping",
+    /// "stopped", "suspended", "replacing", "destroying", "destroyed".
+    ///
+    /// Output only, and deliberately NOT reconciled: setting it does nothing.
+    /// Fly's own proxy stops and starts machines as normal operation when
+    /// `services[].autostop`/`autostart` are set, so treating this field as
+    /// desired state would read an autostopped machine as drift, start it, get
+    /// it autostopped again — an infinite reconcile loop that also bills for
+    /// every wake-up. Use `fly machine start|stop` for runtime control. See
+    /// docs/ARCHITECTURE.md.
+    @formae.FieldHint { hasProviderDefault = true }
+    state: String? = null
+
+    /// The machine's 6PN private IPv6 address, reachable from other machines
+    /// in the same organization. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    privateIp: String? = null
+}
+
+// =============================================================================
+// FLY::Apps::Volume
+// =============================================================================
+
+/// Resolvable handle for `FLY::Apps::Volume` outputs.
+open class VolumeResolvable extends formae.Resolvable {
+    hidden type = "FLY::Apps::Volume"
+
+    hidden id:   VolumeResolvable = (this) { property = "id" }
+    hidden name: VolumeResolvable = (this) { property = "name" }
+}
+
+/// A persistent volume attached to at most one Machine.
+/// Maps to POST /v1/apps/{app}/volumes.
+///
+/// Native id is `{appName}/{volumeId}`.
+///
+/// `region` is createOnly and there is no move operation: a volume is physical
+/// storage on one host. Changing the region replaces the volume, which means
+/// the data is gone. That is the honest model; silently ignoring the change
+/// would be worse.
+@formae.ResourceHint {
+    type = "FLY::Apps::Volume"
+    identifier = "$.id"
+    discoverable = true
+}
+class Volume extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::Volume"
+
+    local parent = this
+    hidden res: VolumeResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// App that owns this volume. Immutable.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    appName: String|formae.Resolvable
+
+    /// Volume name. Machines mount by name or by id. Immutable.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    name: String
+
+    /// Fly region code. Immutable — see the class comment. Falls back to the
+    /// target's `region` when unset.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    region: String? = null
+
+    /// Size in GB. Can grow (PUT .../extend) but never shrink; a smaller value
+    /// is rejected rather than silently ignored.
+    @formae.FieldHint { hasProviderDefault = true }
+    sizeGb: Int? = 1
+
+    /// Encrypt the volume at rest. Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    encrypted: Boolean? = null
+
+    /// Filesystem to format with, e.g. "ext4". Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    fstype: String? = null
+
+    /// Place this volume in a different hardware zone from the app's others.
+    /// Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    requireUniqueZone: Boolean? = null
+
+    /// Take scheduled automatic snapshots. Fly defaults this to true.
+    @formae.FieldHint { hasProviderDefault = true }
+    autoBackupEnabled: Boolean? = null
+
+    /// Days to keep automatic snapshots.
+    @formae.FieldHint { hasProviderDefault = true }
+    snapshotRetention: Int? = null
+
+    /// Volume id, e.g. "vol_9x1kj4rz". Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    id: String? = null
+
+    /// Volume state as reported by Fly. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    state: String? = null
+
+    /// Hardware zone the volume landed in. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    zone: String? = null
+
+    /// Machine currently mounting this volume, if any. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    attachedMachineId: String? = null
+}
+
+// =============================================================================
+// FLY::Apps::Secrets
+// =============================================================================
+
+/// Resolvable handle for `FLY::Apps::Secrets` outputs. Reference it to force a
+/// Machine to be created after its secrets exist.
+open class SecretsResolvable extends formae.Resolvable {
+    hidden type = "FLY::Apps::Secrets"
+
+    hidden appName: SecretsResolvable = (this) { property = "appName" }
+}
+
+/// All of an app's secrets, as one resource.
+///
+/// The Fly secrets endpoint is a bulk bag per app (POST /v1/apps/{app}/secrets
+/// with `{"values": {...}}`). Modelling the whole bag as one resource makes
+/// every mutation a single atomic call, which avoids the lost-update race that
+/// per-secret resources hit when applied concurrently — each concurrent
+/// single-item write is a read-modify-write on the shared bag, and the last
+/// writer wins.
+///
+/// Native id is `{appName}/secrets`, not the bare app name: formae keys
+/// inventory by (target, nativeID) regardless of resource type, so a bare app
+/// name would make the bag a duplicate of its own App and one of them would be
+/// deleted.
+///
+/// Secrets are injected into a machine's environment at boot. **A running
+/// machine does not pick up a changed secret until it restarts** — the plugin
+/// does not restart machines for you, because a service interruption should
+/// not be an invisible side effect of a secret update.
+@formae.ResourceHint {
+    type = "FLY::Apps::Secrets"
+    identifier = "$.appName"
+    discoverable = true
+}
+class Secrets extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::Secrets"
+
+    local parent = this
+    hidden res: SecretsResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// App that owns the bag. Immutable. One Secrets resource per app.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    appName: String|formae.Resolvable
+
+    /// Secret name → value.
+    ///
+    /// Write-only: the plugin never asks Fly to reveal values (the API can, via
+    /// `?show_secrets=true`, and deliberately is not used), so a changed value
+    /// cannot be detected as drift — only an added or removed *name* can.
+    /// Nullable on purpose: the schema extractor marks every non-nullable,
+    /// no-default field `Required`, and discovery rejects a resource whose
+    /// Required fields are absent from the Read response. Since Read never
+    /// returns values, a non-nullable `values` would make every existing
+    /// secret bag undiscoverable. Create() enforces presence in Go instead.
+    ///
+    /// Accepts a `formae.SecretValue` per entry so a value can be a
+    /// formae-managed secret (`formae.value(x).opaque`), hashed at rest and
+    /// never printed.
+    @formae.FieldHint { writeOnly = true }
+    values: Mapping<String, (String|formae.SecretValue)>? = null
+}
+
+// =============================================================================
+// FLY::Apps::Certificate
+// =============================================================================
+
+/// DNS records the user must publish for Fly to validate a custom hostname.
+/// Output only, populated from the API's `dns_requirements`.
+class CertificateDNSRequirements {
+    /// CNAME target to point the hostname at.
+    cname: String? = null
+    /// A records to publish, when using apex records instead of a CNAME.
+    a: Listing<String>? = null
+    /// AAAA records to publish.
+    aaaa: Listing<String>? = null
+    /// Name of the ownership-verification TXT record.
+    ownershipName: String? = null
+    /// Value of the ownership-verification TXT record for this app.
+    ownershipValue: String? = null
+    /// ACME challenge record name.
+    acmeChallengeName: String? = null
+    /// ACME challenge record target.
+    acmeChallengeTarget: String? = null
+}
+
+/// Resolvable handle for `FLY::Apps::Certificate` outputs.
+open class CertificateResolvable extends formae.Resolvable {
+    hidden type = "FLY::Apps::Certificate"
+
+    hidden hostname: CertificateResolvable = (this) { property = "hostname" }
+    hidden status:   CertificateResolvable = (this) { property = "status" }
+}
+
+/// An ACME certificate request for a custom hostname on an app.
+/// Maps to POST /v1/apps/{app}/certificates/acme.
+///
+/// Native id is `{appName}/{hostname}` — the hostname is the server-side key.
+///
+/// Create returns Success as soon as Fly accepts the *request*, not when the
+/// certificate is valid. Validation waits on DNS records only the user can
+/// publish, so `status` can legitimately sit at `pending_validation` forever;
+/// returning InProgress would hang the apply on an action formae cannot take.
+/// Publish the records in `dnsRequirements`, then
+/// `POST .../certificates/{hostname}/check` (or `fly certs check`) to trigger
+/// re-validation.
+@formae.ResourceHint {
+    type = "FLY::Apps::Certificate"
+    identifier = "$.hostname"
+    discoverable = true
+}
+class Certificate extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::Certificate"
+
+    local parent = this
+    hidden res: CertificateResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// App the certificate belongs to. Immutable.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    appName: String|formae.Resolvable
+
+    /// Hostname to certify, e.g. "api.example.com". Immutable — it is the
+    /// resource's identity server-side, so a change replaces the certificate.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    hostname: String
+
+    /// Validation status: "pending_ownership", "pending_validation", "active".
+    /// Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    status: String? = null
+
+    /// Whether Fly considers the hostname's DNS correctly configured.
+    /// Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    configured: Boolean? = null
+
+    /// The DNS records to publish. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    dnsRequirements: CertificateDNSRequirements? = null
+}
+
+// =============================================================================
+// FLY::Apps::IPAddress
+// =============================================================================
+
+/// Resolvable handle for `FLY::Apps::IPAddress` outputs.
+open class IPAddressResolvable extends formae.Resolvable {
+    hidden type = "FLY::Apps::IPAddress"
+
+    hidden ip: IPAddressResolvable = (this) { property = "ip" }
+}
+
+/// An IP address assigned to an app. Maps to
+/// POST /v1/apps/{app}/ip_assignments.
+///
+/// Native id is `{appName}/{ip}`. The address itself is chosen by Fly, so
+/// every input field is createOnly and there is no update path.
+///
+/// An app with Machines and services is still unreachable from the internet
+/// until it has an IP assigned — `fly deploy` does this implicitly, the raw
+/// Machines API does not. `shared_v4` and `v6` are free; a dedicated `v4` is
+/// billable.
+@formae.ResourceHint {
+    type = "FLY::Apps::IPAddress"
+    identifier = "$.ip"
+    discoverable = true
+}
+class IPAddress extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::IPAddress"
+
+    local parent = this
+    hidden res: IPAddressResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// App to assign the address to. Immutable.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    appName: String|formae.Resolvable
+
+    /// Address type: "shared_v4" (free), "v4" (dedicated, billable),
+    /// "v6" (free) or "private_v6". Immutable.
+    @formae.FieldHint {
+        createOnly = true
+        requiredOnCreate = true
+    }
+    addressType: String
+
+    /// Region for a regional address. Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    region: String? = null
+
+    /// 6PN network name, for private addresses. Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    network: String? = null
+
+    /// Bind the address to a named service rather than the whole app.
+    /// Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    serviceName: String? = null
+
+    /// The allocated address. Output only — Fly picks it.
+    @formae.FieldHint { hasProviderDefault = true }
+    ip: String? = null
+
+    /// Whether the address is shared with other apps. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    shared: Boolean? = null
 }
