@@ -1,0 +1,43 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: update FLY::Apps::Machine.
+//
+// Changes `env` and `metadata` — both live in the machine config, so the update
+// is a config replacement that reboots the machine into a new version. Also
+// async: Update returns InProgress and Status() polls the new version up.
+//
+// `image` deliberately stays put: pulling a second image would double the test's
+// wall clock for no extra coverage, since the config-replacement path is the
+// same either way.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local app = v.app
+  app
+
+  new fly.Machine {
+    label = "plugin-sdk-test-machine"
+    appName = app.res.name
+    name = "sdk-test-machine"
+    region = v.region
+    image = v.image
+    guest = v.guest
+    env {
+      ["SDK_TEST_RUN"] = v.testRunID
+      ["SDK_TEST_UPDATED"] = "true"        // ADDED
+    }
+    metadata {
+      ["managed-by"] = "formae-conformance"
+      ["phase"] = "updated"                 // ADDED
+    }
+  }
+}

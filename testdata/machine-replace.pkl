@@ -1,0 +1,38 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: replace FLY::Apps::Machine.
+//
+// `name` is createOnly, so changing it forces a destroy-and-create. Region is
+// also createOnly and would work as the trigger, but it would place the
+// replacement in a second region and pay for a second image pull — same code
+// path, more money and more wall clock.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local app = v.app
+  app
+
+  new fly.Machine {
+    label = "plugin-sdk-test-machine"
+    appName = app.res.name
+    name = "sdk-test-machine-replaced"   // CHANGED — createOnly, forces a replace
+    region = v.region
+    image = v.image
+    guest = v.guest
+    env {
+      ["SDK_TEST_RUN"] = v.testRunID
+    }
+    metadata {
+      ["managed-by"] = "formae-conformance"
+    }
+  }
+}

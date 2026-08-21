@@ -1,0 +1,25 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: create FLY::Apps::App.
+//
+// The cheapest test in the suite. An app is a namespace: nothing bills until a
+// machine runs inside it, and create/delete are both synchronous, so this is
+// the first test to run and the one to reach for when checking credentials.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  new fly.App {
+    label = "plugin-sdk-test-app"
+    name = v.appName
+    org = v.org
+  }
+}

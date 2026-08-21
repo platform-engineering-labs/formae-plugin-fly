@@ -35,11 +35,11 @@ open class Config {
     /// Default Fly region code for Machines and Volumes that do not name one
     /// (e.g. "fra", "iad", "ams"). The authoritative list is public and needs
     /// no auth: GET https://api.machines.dev/v1/platform/regions
-    region: String? = null
+    region: String?
 
     /// Override the API endpoint. Defaults to https://api.machines.dev.
     /// From inside a Fly WireGuard network, http://_api.internal:4280 works.
-    baseUrl: String? = null
+    baseUrl: String?
 
     fixed Type: String = type
     fixed Org: String = org
@@ -106,20 +106,20 @@ class App extends formae.Resource {
     /// 6PN private network name. Apps in the same network can reach each other
     /// over .internal DNS. Defaults to the app's own name server-side.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    network: String? = null
+    network: String?
 
     /// Whether to enable *.fly.dev subdomain routing for this app.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    enableSubdomains: Boolean? = null
+    enableSubdomains: Boolean?
 
     /// Fly's internal app id. Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    id: String? = null
+    id: String?
 
     /// App status as reported by Fly ("pending", "deployed", "suspended").
     /// Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    status: String? = null
+    status: String?
 }
 
 // =============================================================================
@@ -142,9 +142,9 @@ class MachinePort {
     /// External port fly-proxy listens on.
     port: Int
     /// Connection handlers, in order: "http", "tls", "proxy_proto".
-    handlers: Listing<String>? = null
+    handlers: Listing<String>?
     /// Redirect plain HTTP to HTTPS.
-    forceHttps: Boolean? = null
+    forceHttps: Boolean?
 }
 
 /// A service fly-proxy routes to. Without at least one service (and an
@@ -155,33 +155,33 @@ class MachineService {
     /// "tcp" or "udp".
     protocol: String? = "tcp"
     /// Published ports.
-    ports: Listing<MachinePort>? = null
+    ports: Listing<MachinePort>?
     /// Start the machine on an incoming request when it is stopped.
-    autostart: Boolean? = null
+    autostart: Boolean?
     /// "off", "stop" or "suspend". Fly stops idle machines when set — see the
     /// note on `state` below for why the plugin does not fight that.
-    autostop: String? = null
+    autostop: String?
     /// Keep at least this many machines running regardless of traffic.
-    minMachinesRunning: Int? = null
+    minMachinesRunning: Int?
 }
 
 /// A volume mounted into the machine's filesystem.
 class MachineMount {
     /// Volume id (`vol_...`) or, when using `name`, left unset.
-    volume: String? = null
+    volume: String?
     /// Mount point inside the machine. The EntitySet index — see the FieldHint
     /// on `mounts`.
     path: String
     /// Volume name, as an alternative to a specific volume id.
-    name: String? = null
+    name: String?
 }
 
 /// What flyd does when the machine's main process exits.
 class MachineRestart {
     /// "no", "always", "on-failure" or "spot-price".
-    policy: String? = null
+    policy: String?
     /// Cap on restart attempts when policy is "on-failure".
-    maxRetries: Int? = null
+    maxRetries: Int?
 }
 
 /// Resolvable handle for `FLY::Apps::Machine` outputs.
@@ -227,13 +227,13 @@ class Machine extends formae.Resource {
 
     /// Machine name. Fly generates one when omitted.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    name: String? = null
+    name: String?
 
     /// Fly region code. Immutable: a machine is pinned to the host its rootfs
     /// lives on, and there is no move operation. Changing it replaces the
     /// machine. Falls back to the target's `region` when unset.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    region: String? = null
+    region: String?
 
     /// Docker image to run, e.g. "flyio/hellofly:latest" or a registry.fly.io
     /// reference.
@@ -244,15 +244,15 @@ class Machine extends formae.Resource {
     /// in state and in `fly machine status` — put anything sensitive in
     /// `FLY::Apps::Secrets` instead, which the platform injects at boot.
     @formae.FieldHint {}
-    env: Mapping<String, String>? = null
+    env: Mapping<String, String>?
 
     /// CPU and memory sizing.
     @formae.FieldHint { hasProviderDefault = true }
-    guest: MachineGuest? = null
+    guest: MachineGuest?
 
     /// Services fly-proxy routes to.
     @formae.FieldHint {}
-    services: Listing<MachineService>? = null
+    services: Listing<MachineService>?
 
     /// Volume mounts, keyed by mount path. EntitySet semantics: items are
     /// matched by `path` across updates, so reordering the listing is not a
@@ -261,31 +261,31 @@ class Machine extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "path"
     }
-    mounts: Listing<MachineMount>? = null
+    mounts: Listing<MachineMount>?
 
     /// Restart policy.
     @formae.FieldHint { hasProviderDefault = true }
-    restart: MachineRestart? = null
+    restart: MachineRestart?
 
     /// Arbitrary key/value metadata on the machine.
     @formae.FieldHint {}
-    metadata: Mapping<String, String>? = null
+    metadata: Mapping<String, String>?
 
     /// Override the image's entrypoint.
     @formae.FieldHint {}
-    entrypoint: Listing<String>? = null
+    entrypoint: Listing<String>?
 
     /// Override the image's command.
     @formae.FieldHint {}
-    cmd: Listing<String>? = null
+    cmd: Listing<String>?
 
     /// Destroy the machine once its main process exits. For one-shot jobs.
     @formae.FieldHint { hasProviderDefault = true }
-    autoDestroy: Boolean? = null
+    autoDestroy: Boolean?
 
     /// Machine id, e.g. "17811943c9d489". Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    id: String? = null
+    id: String?
 
     /// Current lifecycle state: "created", "starting", "started", "stopping",
     /// "stopped", "suspended", "replacing", "destroying", "destroyed".
@@ -298,12 +298,12 @@ class Machine extends formae.Resource {
     /// every wake-up. Use `fly machine start|stop` for runtime control. See
     /// docs/ARCHITECTURE.md.
     @formae.FieldHint { hasProviderDefault = true }
-    state: String? = null
+    state: String?
 
     /// The machine's 6PN private IPv6 address, reachable from other machines
     /// in the same organization. Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    privateIp: String? = null
+    privateIp: String?
 }
 
 // =============================================================================
@@ -358,7 +358,7 @@ class Volume extends formae.Resource {
     /// Fly region code. Immutable — see the class comment. Falls back to the
     /// target's `region` when unset.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    region: String? = null
+    region: String?
 
     /// Size in GB. Can grow (PUT .../extend) but never shrink; a smaller value
     /// is rejected rather than silently ignored.
@@ -367,40 +367,40 @@ class Volume extends formae.Resource {
 
     /// Encrypt the volume at rest. Immutable.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    encrypted: Boolean? = null
+    encrypted: Boolean?
 
     /// Filesystem to format with, e.g. "ext4". Immutable.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    fstype: String? = null
+    fstype: String?
 
     /// Place this volume in a different hardware zone from the app's others.
     /// Immutable.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    requireUniqueZone: Boolean? = null
+    requireUniqueZone: Boolean?
 
     /// Take scheduled automatic snapshots. Fly defaults this to true.
     @formae.FieldHint { hasProviderDefault = true }
-    autoBackupEnabled: Boolean? = null
+    autoBackupEnabled: Boolean?
 
     /// Days to keep automatic snapshots.
     @formae.FieldHint { hasProviderDefault = true }
-    snapshotRetention: Int? = null
+    snapshotRetention: Int?
 
     /// Volume id, e.g. "vol_9x1kj4rz". Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    id: String? = null
+    id: String?
 
     /// Volume state as reported by Fly. Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    state: String? = null
+    state: String?
 
     /// Hardware zone the volume landed in. Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    zone: String? = null
+    zone: String?
 
     /// Machine currently mounting this volume, if any. Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    attachedMachineId: String? = null
+    attachedMachineId: String?
 }
 
 // =============================================================================
@@ -465,11 +465,17 @@ class Secrets extends formae.Resource {
     /// returns values, a non-nullable `values` would make every existing
     /// secret bag undiscoverable. Create() enforces presence in Go instead.
     ///
-    /// Accepts a `formae.SecretValue` per entry so a value can be a
-    /// formae-managed secret (`formae.value(x).opaque`), hashed at rest and
-    /// never printed.
+    /// Opacity is per entry, not per field: write a sensitive value as
+    /// `formae.value(x).opaque` and the agent hashes it at rest.
+    ///
+    /// A field-level `opaque = true` hint would be pointless here — formae's
+    /// schema extractor computes it as `opaque = isSecretValueType(fieldType)`,
+    /// overwriting whatever the author set, and that check does not look inside
+    /// a Mapping's value type. So on formae 0.89.0 a map-valued field cannot be
+    /// marked opaque as a whole. Verified against the rendered schema Hints.
+    /// `writeOnly` still applies and keeps the field out of drift detection.
     @formae.FieldHint { writeOnly = true }
-    values: Mapping<String, (String|formae.SecretValue)>? = null
+    values: Mapping<String, (String|formae.Value)>?
 }
 
 // =============================================================================
@@ -480,19 +486,19 @@ class Secrets extends formae.Resource {
 /// Output only, populated from the API's `dns_requirements`.
 class CertificateDNSRequirements {
     /// CNAME target to point the hostname at.
-    cname: String? = null
+    cname: String?
     /// A records to publish, when using apex records instead of a CNAME.
-    a: Listing<String>? = null
+    a: Listing<String>?
     /// AAAA records to publish.
-    aaaa: Listing<String>? = null
+    aaaa: Listing<String>?
     /// Name of the ownership-verification TXT record.
-    ownershipName: String? = null
+    ownershipName: String?
     /// Value of the ownership-verification TXT record for this app.
-    ownershipValue: String? = null
+    ownershipValue: String?
     /// ACME challenge record name.
-    acmeChallengeName: String? = null
+    acmeChallengeName: String?
     /// ACME challenge record target.
-    acmeChallengeTarget: String? = null
+    acmeChallengeTarget: String?
 }
 
 /// Resolvable handle for `FLY::Apps::Certificate` outputs.
@@ -547,16 +553,16 @@ class Certificate extends formae.Resource {
     /// Validation status: "pending_ownership", "pending_validation", "active".
     /// Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    status: String? = null
+    status: String?
 
     /// Whether Fly considers the hostname's DNS correctly configured.
     /// Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    configured: Boolean? = null
+    configured: Boolean?
 
     /// The DNS records to publish. Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    dnsRequirements: CertificateDNSRequirements? = null
+    dnsRequirements: CertificateDNSRequirements?
 }
 
 // =============================================================================
@@ -611,22 +617,22 @@ class IPAddress extends formae.Resource {
 
     /// Region for a regional address. Immutable.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    region: String? = null
+    region: String?
 
     /// 6PN network name, for private addresses. Immutable.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    network: String? = null
+    network: String?
 
     /// Bind the address to a named service rather than the whole app.
     /// Immutable.
     @formae.FieldHint { createOnly = true; hasProviderDefault = true }
-    serviceName: String? = null
+    serviceName: String?
 
     /// The allocated address. Output only — Fly picks it.
     @formae.FieldHint { hasProviderDefault = true }
-    ip: String? = null
+    ip: String?
 
     /// Whether the address is shared with other apps. Output only.
     @formae.FieldHint { hasProviderDefault = true }
-    shared: Boolean? = null
+    shared: Boolean?
 }

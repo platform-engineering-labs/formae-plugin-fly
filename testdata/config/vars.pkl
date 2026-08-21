@@ -1,0 +1,64 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Shared values for the FLY conformance formae. The harness skips
+// testdata/config/, so this file is not itself a test case.
+
+import "@formae/formae.pkl"
+import "@fly/core/fly.pkl"
+
+// Test run id stamps unique names per run so repeat and parallel runs cannot
+// collide. The harness sets it to lowercase hex, which is safe in a Fly app
+// name (Fly allows lowercase letters, digits and hyphens only).
+testRunID = read("env:FORMAE_TEST_RUN_ID")
+
+// Fly app names are globally unique across all of Fly.io, so the prefix has to
+// be distinctive as well as greppable — clean-environment.sh deletes on it.
+appName = "formae-sdk-test-\(testRunID)"
+
+// Organization that owns the test resources. Required: app create and app list
+// both need an org slug and neither can derive it from a token.
+org = read("env:FLY_ORG")
+
+// Region for machines and volumes. FLY_TEST_REGION rather than FLY_REGION on
+// purpose: inside a Fly VM, FLY_REGION means "the region I am running in", and
+// picking it up here would make the suite behave differently depending on where
+// it runs.
+region = read?("env:FLY_TEST_REGION") ?? "fra"
+
+// Cheapest thing Fly runs: shared-cpu-1x with 256 MB. Machines bill by the
+// second, so conformance uses the smallest guest and destroys it in the same
+// test.
+guest = new fly.MachineGuest {
+    cpuKind = "shared"
+    cpus = 1
+    memoryMb = 256
+}
+
+// Small public image that boots fast and keeps running — a machine whose
+// process exits would settle in `stopped`, which is a legitimate resting state
+// but a less useful thing to assert on.
+image = "flyio/hellofly:latest"
+
+stack = new formae.Stack {
+    label = "plugin-sdk-test-fly-\(testRunID)"
+    description = "Plugin SDK conformance test for FLY"
+}
+
+target = new formae.Target {
+    label = "fly-target"
+    config = new fly.Config {
+        org = read("env:FLY_ORG")
+        region = read?("env:FLY_TEST_REGION") ?? "fra"
+    }
+}
+
+// The app every other test case hangs off. Apps are free — nothing bills until
+// a machine runs — so each test case creates its own rather than sharing one
+// through an env var.
+app = new fly.App {
+    label = "plugin-sdk-test-app"
+    name = appName
+    org = read("env:FLY_ORG")
+}

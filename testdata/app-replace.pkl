@@ -1,0 +1,25 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: replace FLY::Apps::App.
+//
+// There is no -update variant, and that is the point: the Machines API has no
+// app-update endpoint, so every App field is createOnly and any change is a
+// replacement. Here `name` changes, which is also the native id.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  new fly.App {
+    label = "plugin-sdk-test-app"
+    name = "\(v.appName)-replaced"   // CHANGED — createOnly, forces a replace
+    org = v.org
+  }
+}

@@ -1,61 +1,88 @@
 #!/bin/bash
-# © 2025 Platform Engineering Labs Inc.
+# © 2026 Platform Engineering Labs Inc.
 # SPDX-License-Identifier: FSL-1.1-ALv2
 #
-# Clean Environment Hook
-# ======================
-# This script is called before AND after conformance tests to clean up
-# test resources in your cloud environment.
+# Clean Environment Hook for the Fly.io plugin.
 #
-# Purpose:
-# - Before tests: Remove orphaned resources from previous failed runs
-# - After tests: Clean up resources created during the test run
+# Called before AND after conformance tests. Deletes every app in the target
+# organization whose name starts with the test prefix.
 #
-# The script should be idempotent - safe to run multiple times.
-# It should delete all resources matching the test resource prefix.
+# One DELETE /v1/apps/{name} is enough: destroying an app cascades to its
+# machines, volumes, secrets, certificates and IP assignments. That is also why
+# every conformance forma creates its own app — a run that dies mid-test leaves
+# exactly one thing to clean up, and cleaning it stops the machine billing.
 #
-# Test resources typically use a naming convention like:
-#   formae-plugin-sdk-test-{run-id}-*
+# Required env:
+#   FLY_ACCESS_TOKEN or FLY_API_TOKEN   API token (flyctl's own precedence)
+#   FLY_ORG                             Organization slug, or "personal"
 #
-# Implementation varies by provider. Examples:
+# Optional:
+#   TEST_PREFIX      default "formae-sdk-test-". Must match testdata/config/vars.pkl.
+#   FLY_API_BASE     default https://api.machines.dev
 #
-# AWS:
-#   - List and delete resources with test prefix using AWS CLI
-#   - Use resource tagging for easier identification
-#
-# OpenStack:
-#   - Use openstack CLI to list and delete test resources
-#   - Clean up in order: instances, volumes, networks, security groups, etc.
-#
-# Exit with non-zero status only for unexpected errors.
-# Missing resources (already cleaned) should not cause failures.
+# Idempotent. Exits 0 when credentials are absent so a contributor without a Fly
+# account can still run `make lint` and `make test-unit`.
 
 set -euo pipefail
 
-# Prefix used for test resources - should match what conformance tests create
-TEST_PREFIX="${TEST_PREFIX:-formae-plugin-sdk-test-}"
+TEST_PREFIX="${TEST_PREFIX:-formae-sdk-test-}"
+API_BASE="${FLY_API_BASE:-https://api.machines.dev}"
 
-echo "clean-environment.sh: Cleaning resources with prefix '${TEST_PREFIX}'"
-echo ""
-echo "To implement cleanup for your provider, edit this script."
-echo "See comments in this file for examples."
-echo ""
+# flyctl resolves FLY_ACCESS_TOKEN first, FLY_API_TOKEN second
+# (superfly/flyctl internal/config/config.go). Match it.
+TOKEN="${FLY_ACCESS_TOKEN:-${FLY_API_TOKEN:-}}"
 
-# Uncomment and modify for your provider:
-#
-# # AWS - clean up S3 buckets with test prefix
-# echo "Cleaning S3 buckets..."
-# aws s3api list-buckets --query "Buckets[?starts_with(Name, '${TEST_PREFIX}')].Name" --output text | \
-#     xargs -r -n1 aws s3 rb --force s3://
-#
-# # OpenStack - clean up instances
-# echo "Cleaning instances..."
-# openstack server list --name "^${TEST_PREFIX}" -f value -c ID | \
-#     xargs -r -n1 openstack server delete --wait
-#
-# # OpenStack - clean up volumes
-# echo "Cleaning volumes..."
-# openstack volume list --name "^${TEST_PREFIX}" -f value -c ID | \
-#     xargs -r -n1 openstack volume delete
+if [[ -z "${TOKEN}" ]]; then
+  echo "clean-environment.sh: no FLY_ACCESS_TOKEN or FLY_API_TOKEN — skipping cleanup"
+  exit 0
+fi
+if [[ -z "${FLY_ORG:-}" ]]; then
+  echo "clean-environment.sh: FLY_ORG unset — skipping cleanup"
+  exit 0
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "clean-environment.sh: jq not found — cannot parse the app list, skipping cleanup" >&2
+  exit 0
+fi
 
-echo "clean-environment.sh: Cleanup complete (no-op - not configured)"
+auth_curl() {
+  curl --silent --show-error --fail-with-body \
+    --header "Authorization: Bearer ${TOKEN}" \
+    --header "Accept: application/json" \
+    "$@"
+}
+
+echo "clean-environment.sh: cleaning apps in org '${FLY_ORG}' with prefix '${TEST_PREFIX}'"
+
+# GET /v1/apps requires org_slug; without it the API answers 404 rather than
+# listing everything.
+#
+# The exit status is checked rather than the body: --fail-with-body writes the
+# error payload to stdout and exits non-zero, so a 401 would otherwise flow into
+# jq, match nothing, and print a false "no leftover test apps" all-clear.
+if ! apps_json="$(auth_curl "${API_BASE}/v1/apps?org_slug=${FLY_ORG}")"; then
+  echo "  ERROR: could not list apps in org '${FLY_ORG}' — bad token, wrong org, or API down." >&2
+  echo "  Response: ${apps_json}" >&2
+  echo "  Nothing was cleaned. Leftover test apps (and any machines still billing) may remain." >&2
+  exit 0
+fi
+
+names="$(printf '%s' "${apps_json}" | jq -r --arg p "${TEST_PREFIX}" \
+  '.apps[]? | select(.name != null) | select(.name | startswith($p)) | .name' || true)"
+
+if [[ -z "${names}" ]]; then
+  echo "  no leftover test apps"
+  echo "clean-environment.sh: done"
+  exit 0
+fi
+
+# App deletions are rate-limited to 100/minute. A conformance run leaves at most
+# a handful of apps behind, so a plain loop stays well inside that.
+while IFS= read -r name; do
+  [[ -z "${name}" ]] && continue
+  echo "  DELETE app ${name} (cascades machines, volumes, secrets, certs, IPs)"
+  auth_curl -X DELETE "${API_BASE}/v1/apps/${name}" >/dev/null || \
+    echo "    warning: delete failed for ${name}, continuing" >&2
+done <<< "${names}"
+
+echo "clean-environment.sh: done"
