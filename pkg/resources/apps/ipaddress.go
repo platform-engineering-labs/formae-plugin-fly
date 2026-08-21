@@ -149,8 +149,15 @@ func (i *IPAddress) Read(ctx context.Context, req *resource.ReadRequest) (*resou
 }
 
 // addressTypeFor infers the request type from what the listing does report.
-// `shared` plus the address family is enough to distinguish the three types the
-// plugin can allocate; anything else stays empty rather than guessing.
+//
+// The listing carries the address and a `shared` flag, never the type that was
+// requested, and `addressType` is a non-nullable field — so discovery rejects a
+// resource whose Read output omits it, and inferring is the only option.
+//
+// `shared` plus the address family round-trips the three supported types
+// exactly: shared_v4, v4 and v6. It cannot distinguish a private 6PN address
+// from a public IPv6 one, which is why the schema does not advertise
+// "private_v6" as supported — it would read back as "v6" and drift forever.
 func addressTypeFor(a ipAssignmentAPI) string {
 	isV6 := false
 	for _, ch := range a.IP {

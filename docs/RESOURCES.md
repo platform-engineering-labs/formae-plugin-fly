@@ -119,6 +119,13 @@ Transport: **REST** = `api.machines.dev` · **GQL** = `api.fly.io/graphql`.
 | `FLY::Apps::Certificate` | REST | `/v1/apps/{app}/certificates[/acme\|/{hostname}]` | C R D L | P1 | all 10 (`fly_cert`/`fly_certificate`) |
 | `FLY::Apps::IPAddress` | REST | `/v1/apps/{app}/ip_assignments[/{ip}]` | C R D L | P1 | all 10 (`fly_ip`/`fly_ip_address`) |
 
+Supported `addressType` values are `shared_v4`, `v4` and `v6`. The API also accepts
+`private_v6` and the plugin can create one, but it is not advertised as supported: the
+assignment listing reports only the address and a `shared` flag, never the requested type,
+so `Read` must infer the type from the address family — and a private 6PN address is IPv6,
+so it would read back as `v6` and drift forever. The three supported values round-trip
+exactly.
+
 No `FLY::Apps::App` **U**: the REST API exposes no app-update endpoint. Every App field
 is `createOnly`; a change replaces the app. Same for Certificate and IPAddress — both are
 create-or-destroy only server-side.
@@ -194,7 +201,7 @@ and then destroys, per resource, per run. So cost and wall-clock matter more tha
 | `FLY::Apps::Secrets` | **$0** | seconds | **yes, secondary** |
 | `FLY::Apps::Machine` | ~$0.0000008/s for `shared-cpu-1x`/256 MB — cents per run | 30–90 s create, needs `TIMEOUT=15` | **yes, third** (user-approved) |
 | `FLY::Apps::Volume` | 1 GB provisioned storage, prorated | seconds | no — leaves billable storage if a run aborts |
-| `FLY::Apps::IPAddress` | dedicated IPv4 is billable; shared IPv4 and IPv6 are free | seconds | no — v1 only requests `shared_v4`/`v6`, but not worth a lifecycle test |
+| `FLY::Apps::IPAddress` | dedicated IPv4 is billable; shared IPv4 and IPv6 are free | seconds | no — not worth a lifecycle test |
 | `FLY::Apps::Certificate` | $0 | never converges | **no** — ACME validation needs DNS records on a domain we control; `status` stays `pending_validation` forever in CI |
 
 `clean-environment.sh` deletes any app whose name starts with the test prefix, which

@@ -143,3 +143,28 @@ func TestIPAddressUpdateIsNotUpdatable(t *testing.T) {
 		t.Error("Update hit the API")
 	}
 }
+
+// addressType is inferred because the listing never reports the requested type,
+// and the field is non-nullable so Read cannot omit it. These three round-trip;
+// a private 6PN address would come back as "v6", which is why the schema does
+// not advertise private_v6 as supported.
+func TestAddressTypeInference(t *testing.T) {
+	yes, no := true, false
+	tests := []struct {
+		name string
+		in   ipAssignmentAPI
+		want string
+	}{
+		{"shared v4", ipAssignmentAPI{IP: "66.241.125.1", Shared: &yes}, "shared_v4"},
+		{"dedicated v4", ipAssignmentAPI{IP: "137.66.30.7", Shared: &no}, "v4"},
+		{"v4 with no shared flag", ipAssignmentAPI{IP: "137.66.30.7"}, "v4"},
+		{"v6", ipAssignmentAPI{IP: "2a09:8280:1::1:2b4c", Shared: &no}, "v6"},
+		// A 6PN address is IPv6 and is indistinguishable from a public one here.
+		{"private 6PN reads back as v6", ipAssignmentAPI{IP: "fdaa:0:1::3"}, "v6"},
+	}
+	for _, tt := range tests {
+		if got := addressTypeFor(tt.in); got != tt.want {
+			t.Errorf("%s: addressTypeFor(%q) = %q, want %q", tt.name, tt.in.IP, got, tt.want)
+		}
+	}
+}
