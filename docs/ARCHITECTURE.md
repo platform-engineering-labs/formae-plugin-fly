@@ -279,6 +279,24 @@ Fly-specific classification beyond the status code:
 - **`/v1/postgres` returns `404 {"error":"Organization not found"}` for a bad org**, which
   is an `InvalidRequest` about the *org*, not a missing cluster. Only relevant once P2
   lands; noted so it is not mis-mapped then.
+
+## Secrets and opacity — what the SDK can and cannot express
+
+`FLY::Apps::Secrets.values` is `writeOnly`, which keeps it out of drift detection. It is
+*not* field-level `opaque`, and that is not an oversight: formae's schema extractor
+computes the hint as `opaque = isSecretValueType(fieldType)`, overwriting whatever the
+author wrote, and `isSecretValueType` walks nullable and union types but not a generic's
+type arguments. A `Mapping`-valued field therefore cannot be marked opaque as a whole on
+formae 0.89.0 — setting `opaque = true` in the FieldHint is silently discarded (verified
+by inspecting the rendered `Schema.Hints`).
+
+Opacity is available per entry instead. The field is typed
+`Mapping<String, (String|formae.Value)>`, so a sensitive entry can be written
+`formae.value(x).opaque`, which renders as `{"$value": …, "$visibility": "Opaque"}` and is
+hashed at rest by the agent; the plugin still receives a plain string. Plain-string
+entries are stored as written. The README and the examples use `formae.value(…).opaque`
+for anything that is actually a secret, and that is the guidance to follow until the SDK
+can express opacity on a map field.
 - The error body's message field is `message` on some upstreams and `error` on others
   (§ Transport). The decoder probes `message`, `error`, `msg` in that order.
 
@@ -372,11 +390,24 @@ guessing at name patterns would hide resources a user wanted to import.
 IPAddress, `$.appName` for Secrets — the fields those resources actually identify
 themselves by.
 
-Pagination: the Machines API does not paginate apps, machines, volumes, secrets or IP
-assignments — each returns a complete array. `listCertificatesResponse` has a
-`next_cursor` field; the plugin passes formae's `PageToken` through to it. `List()` for
-the other types ignores `PageToken` and returns a nil `NextPageToken`, which is accurate
-rather than a stub.
+Pagination is uneven across the API, so the plugin's handling is too:
+
+| Endpoint | Paginated? | What `List()` does |
+|----------|-----------|--------------------|
+| `GET /v1/orgs/{org}/machines` | yes — `cursor` + `limit` | passes formae's `PageToken` as `cursor`, returns `next_cursor` as `NextPageToken` |
+| `GET /v1/orgs/{org}/volumes` | yes — `cursor` + `limit` | same |
+| `GET /v1/apps/{app}/certificates` | yes — `cursor` + `limit` (default 25, max 500) | follows the cursor to the end inside one `List()` call |
+| `GET /v1/apps?org_slug=` | no | returns the whole array, nil `NextPageToken` |
+| `GET /v1/apps/{app}/secrets` | no | as above |
+| `GET /v1/apps/{app}/ip_assignments` | no | as above |
+
+Certificates are the odd one out: because `List()` already fans out over every app, a
+per-app cursor cannot be threaded through formae's single `PageToken`, so that loop
+follows the cursor internally. Stopping at page one would report a partial answer, which
+discovery reads as "these are all the certificates" — and prunes the rest.
+
+Both org-wide calls also pass `summary=true`: discovery only needs native ids, and the
+full machine config per row is a large payload for nothing.
 
 ---
 

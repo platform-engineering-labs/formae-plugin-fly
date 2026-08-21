@@ -1,93 +1,232 @@
-> **⚠️ Do not clone this repository directly!**
->
-> Use `formae plugin init` to create your plugin. This command scaffolds a new
-> plugin from this template with proper naming and configuration.
->
-> ```bash
-> formae plugin init my-plugin
-> ```
+# formae-plugin-fly
+
+A [Formae](https://github.com/platform-engineering-labs/formae) plugin for
+[Fly.io](https://fly.io). Manage apps, machines, volumes, secrets, certificates and IP
+addresses as declarative infrastructure.
+
+Namespace `FLY`. Requires formae **0.89.0** or newer.
 
 ---
 
-## Setup Checklist
+## Credentials
 
-*Remove this section and the warning above after completing setup.*
+The plugin reads the API token from the environment, never from a forma or from target
+config. Resolution order matches `flyctl` exactly, so a token that works with `fly` works
+here:
 
-After creating your plugin with `formae plugin init`, complete these steps:
+1. `FLY_ACCESS_TOKEN`
+2. `FLY_API_TOKEN`
 
-- [ ] Update `formae-plugin.pkl` with your plugin metadata (name, namespace, summary, category, description, license)
-- [ ] Choose your license. **The formae Hub only accepts plugins licensed
-      under one of: `Apache-2.0`, `BSD-3-Clause`, `MIT`, or `MPL-2.0`.**
-      Pick one of these if you intend to publish to the Hub. Copy the
-      matching file from `licenses/` to `LICENSE`, then set the `license`
-      field in `formae-plugin.pkl` to the same SPDX identifier.
-- [ ] Define your resource types in `schema/pkl/*.pkl`
-- [ ] Implement CRUD operations in `plugin.go`
-- [ ] Update test fixtures in `testdata/*.pkl` to use your resources
-- [ ] Update this README (replace title, description, resources table, etc.)
-- [ ] Update [CONTRIBUTING.md](CONTRIBUTING.md) if your local dev steps
-      differ from the template's defaults
-- [ ] Set up local credentials for testing
-- [ ] Run conformance tests locally: `make conformance-test`
-- [ ] Configure CI credentials in `.github/workflows/ci.yml` (optional)
-- [ ] Register the plugin on the formae Hub (the Hub installs its
-      GitHub App on your repo, and tag pushes from then on dispatch
-      builds via the Hub — no per-repo release workflow needed)
-- [ ] Remove this checklist section and the warning box above
+```bash
+export FLY_API_TOKEN=$(fly auth token)   # personal access token
+export FLY_ORG=my-org                    # organization slug, or "personal"
+```
 
-For detailed guidance, see the [Plugin SDK Documentation](https://docs.formae.io/plugin-sdk).
+`~/.fly/config.yml` is deliberately *not* read — the plugin runs inside the formae agent,
+often in a container with no `$HOME/.fly`.
 
-For local development workflow (building, testing, conformance), see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+### Which token types work
+
+| Token | Create `fly tokens …` | Works? |
+|-------|----------------------|--------|
+| Personal access token | `fly auth token` | Yes — full surface. Best for local development. |
+| Org token | `fly tokens create org` | Yes, for everything in that org, including app create. Best for CI. |
+| Org read-only | `fly tokens create readonly` | Read, List and discovery only. Every write fails 403 → `AccessDenied`. |
+| App deploy token | `fly tokens deploy` | **No.** Scoped to one existing app; cannot create apps. |
 
 ---
 
-# Example Plugin for formae
-
-*TODO: Update title and description for your plugin*
-
-Example Formae plugin template - replace this with a description of what your plugin manages.
-
-## Supported Resources
-
-*TODO: Document your supported resource types*
-
-| Resource Type | Description |
-|---------------|-------------|
-| `FLY::Service::Resource` | Example resource (replace with your actual resources) |
-
-## Configuration
-
-Configure a target in your Forma file:
+## Target configuration
 
 ```pkl
 new formae.Target {
-    label = "my-target"
-    namespace = "FLY"  // TODO: Update with your namespace
-    config = new Mapping {
-        ["region"] = "us-east-1"
-        // TODO: Add your provider-specific configuration
-    }
+  label = "fly-target"
+  config = new fly.Config {
+    org    = "my-org"   // required — organization slug, or "personal"
+    region = "fra"      // optional — default region for machines and volumes
+    baseUrl = null      // optional — defaults to https://api.machines.dev
+  }
 }
 ```
 
-## Examples
+`org` is required: listing apps (`GET /v1/apps?org_slug=`) and org-wide machine and
+volume discovery both need it, and it cannot be derived from a token.
 
-See the [examples/](examples/) directory for usage examples.
+`region` is a default so a forma need not repeat it on every machine and volume; a
+resource-level `region` wins. Region codes are the three-letter Fly codes; the
+authoritative list is public and needs no auth:
 
 ```bash
-# Evaluate an example
-formae eval examples/basic/main.pkl
-
-# Apply resources
-formae apply --mode reconcile --watch examples/basic/main.pkl
+curl -s https://api.machines.dev/v1/platform/regions | jq -r '.Regions[].code'
 ```
 
-## Licensing
+`FLY_REGION` is *not* used as a fallback. Inside a Fly VM it means "the region I am
+running in", which is a different thing from "the region to create in" — inheriting it
+would make applies behave differently depending on where the agent runs.
 
-The formae Hub accepts plugins under one of: **Apache-2.0**, **BSD-3-Clause**,
-**MIT**, or **MPL-2.0**. Plugins under any other license can still be built
-and used locally, but cannot be published to the Hub.
+---
 
-See the formae plugin policy:
-<https://docs.formae.io/plugin-sdk/>
+## Supported resources
+
+| Resource type | CRUD | Notes |
+|---------------|------|-------|
+| `FLY::Apps::App` | C R D L | Free. Every field is `createOnly`: the API has no app-update endpoint. |
+| `FLY::Apps::Machine` | C R U D L | **Bills per second while running.** Create and update are async. |
+| `FLY::Apps::Volume` | C R U D L | Update covers backup settings and growth. Cannot shrink. |
+| `FLY::Apps::Secrets` | C R U D L | One resource per app, holding the whole bag. Values are write-only. |
+| `FLY::Apps::Certificate` | C R D L | ACME for a custom hostname. Create does not wait for DNS validation. |
+| `FLY::Apps::IPAddress` | C R D L | Required for the app to be reachable at all. `shared_v4` and `v6` are free. |
+
+Everything above is the Machines REST API (`api.machines.dev`) — one transport, no
+GraphQL. See [docs/RESOURCES.md](docs/RESOURCES.md) for the full API catalog, what is
+coming next (Managed Postgres is the big one, 22 REST operations), and what is
+GraphQL-only. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) records the decisions.
+
+### Things worth knowing before you apply
+
+- **An app with machines and services is still unreachable** until it has an
+  `IPAddress`. `fly deploy` allocates one implicitly; the raw Machines API does not.
+- **A running machine does not pick up a changed secret** until it restarts. The plugin
+  does not restart machines for you — a service interruption should not be an invisible
+  side effect of a secret update. Use `fly machine restart`, or change something in the
+  machine's config to force a new version.
+- **`Machine.state` is an output, not desired state.** Setting it does nothing. fly-proxy
+  stops and starts machines itself when `autostop`/`autostart` are set, so reconciling
+  `state` would fight the platform in a loop that also bills for every wake-up. Use
+  `fly machine start|stop` for runtime control.
+- **`region` is `createOnly` on machines and volumes.** Fly has no move operation for
+  either, so a region change is a replacement — and for a volume that means the data is
+  gone.
+- **A certificate can sit at `pending_validation` forever.** Create succeeds as soon as
+  Fly accepts the request; publish the records in the resource's `dnsRequirements` output
+  and then `fly certs check <hostname>`.
+
+---
+
+## Example
+
+```pkl
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@fly/core/fly.pkl"
+
+local flyOrg = read("env:FLY_ORG")
+
+forma {
+  new formae.Stack { label = "fly-demo" }
+
+  new formae.Target {
+    label = "fly-target"
+    config = new fly.Config {
+      org = flyOrg
+      region = "fra"
+    }
+  }
+
+  local app = new fly.App {
+    label = "demo-app"
+    name = "my-globally-unique-app-name"
+    org = flyOrg
+  }
+  app
+
+  new fly.Secrets {
+    label = "demo-secrets"
+    appName = app.res.name
+    values {
+      // Per-entry opacity: hashed at rest, never printed.
+      ["DATABASE_URL"] = formae.value(read("env:DATABASE_URL")).opaque
+    }
+  }
+
+  new fly.Machine {
+    label = "demo-machine"
+    appName = app.res.name
+    name = "web"
+    image = "flyio/hellofly:latest"
+    guest = new fly.MachineGuest { cpuKind = "shared"; cpus = 1; memoryMb = 256 }
+    services {
+      new fly.MachineService {
+        internalPort = 8080
+        autostart = true
+        autostop = "stop"
+        ports {
+          new fly.MachinePort { port = 443; handlers { "tls"; "http" } }
+        }
+      }
+    }
+  }
+
+  new fly.IPAddress {
+    label = "demo-ipv4"
+    appName = app.res.name
+    addressType = "shared_v4"
+  }
+}
+```
+
+```bash
+formae apply --mode reconcile --watch main.pkl
+formae destroy main.pkl
+```
+
+Runnable versions:
+
+- [`examples/basic/`](examples/basic/) — one reachable Fly app: app, secret, machine, IPs.
+- [`examples/fullstack-fly-supabase-vercel/`](examples/fullstack-fly-supabase-vercel/) —
+  a full-stack app across three plugins, with a two-plugin variant that applies today.
+
+### Secrets and opacity
+
+`Secrets.values` is `writeOnly`, so formae never diffs the values — a changed value
+cannot be detected as drift, only an added or removed *name*. The plugin also never asks
+Fly to reveal values (the API can, via `?show_secrets=true`), so nothing pulls secret
+material back out.
+
+Mark individual entries opaque with `formae.value(x).opaque`; they are then hashed at
+rest. A field-level `opaque` hint is not available for a map-valued field on formae
+0.89.0 — see docs/ARCHITECTURE.md for why.
+
+---
+
+## Development
+
+```bash
+make build          # build to bin/fly
+make lint           # golangci-lint
+make test-unit      # unit tests (//go:build unit), no credentials needed
+make verify-schema  # validate the Pkl schema
+make install        # build + install to ~/.pel/formae/plugins/fly/v<version>/
+```
+
+Conformance tests run the **installed** binary, so `make install` is not optional —
+`make conformance-test` does it for you as a dependency:
+
+```bash
+export FLY_API_TOKEN=$(fly auth token)
+export FLY_ORG=my-org
+export FLY_TEST_REGION=fra        # optional, defaults to fra
+
+make conformance-test TEST=app                    # free, seconds
+make conformance-test TEST=secrets                # free, seconds
+make conformance-test TEST=machine TIMEOUT=15     # BILLABLE, async, needs the timeout
+make conformance-test TIMEOUT=15                  # all three
+```
+
+`make clean-environment` deletes every app in `FLY_ORG` whose name starts with
+`formae-sdk-test-`. Destroying an app cascades to its machines, volumes, secrets,
+certificates and IP assignments, so that one call is enough to stop a leaked machine
+billing. It runs automatically before and after each conformance run, and needs `jq`.
+
+Adding a resource is documented at the end of
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The short version: read the operation out
+of the OpenAPI spec (`https://docs.machines.dev/spec/openapi3.json`) rather than from a
+Terraform provider, write the failing unit test first, and register only the operations
+the API actually supports.
+
+---
+
+## License
+
+FSL-1.1-ALv2. See [LICENSE](LICENSE).

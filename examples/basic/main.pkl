@@ -1,46 +1,116 @@
-/*
- * Basic Example
- *
- * This example shows how to define resources using your plugin.
- * Run with: formae apply --mode reconcile --watch examples/basic/main.pkl
- */
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// A publicly reachable Fly.io app in one apply.
+//
+// Creates an app, a secret, a machine running a container image, and a shared
+// IPv4 plus an IPv6 address — the minimum for something the internet can reach.
+// The machine references the secret and the app via resolvables, so formae
+// orders the whole thing itself: app, then secret, then machine, then IPs.
+//
+// Setup:
+//   export FLY_API_TOKEN=$(fly auth token)     # or FLY_ACCESS_TOKEN
+//   export FLY_ORG=<your org slug, or "personal">
+//   formae apply --mode reconcile --watch examples/basic/main.pkl
+//
+// Machine create is async (image pull + boot, 5-90s); --watch shows progress.
+//
+// COSTS MONEY: the machine bills per second while it runs. shared-cpu-1x with
+// 256 MB is the cheapest Fly offers. Tear it down with:
+//   formae destroy examples/basic/main.pkl
+
 amends "@formae/forma.pkl"
 
 import "@formae/formae.pkl"
 import "@fly/core/fly.pkl"
 
+local flyOrg = read("env:FLY_ORG")
+local flyRegion = read?("env:FLY_DEMO_REGION") ?? "fra"
+
 forma {
   new formae.Stack {
-    label = "default"
-    description = "Default stack for example resources"
+    label = "fly-basic"
+    description = "A single reachable Fly.io app"
   }
 
   new formae.Target {
-    label = "my-target"
-    namespace = "FLY"
-    // Add your provider-specific configuration here
-    // For typed config, create a Config class in your schema:
-    //   config = new fly.Config { region = "us-east-1" }
-    config = new Mapping {
-      ["region"] = "us-east-1"
+    label = "fly-target"
+    config = new fly.Config {
+      org = flyOrg
+      region = flyRegion
     }
   }
 
-  new fly.ExampleResource {
-    label = "my-resource"
-    name = "My Example Resource"
-    description = "This is an example resource"
-    region = "us-east-1"
+  local app = new fly.App {
+    label = "demo-app"
+    // App names are globally unique across all of Fly.io — change this before
+    // applying, or the create fails with HTTP 422.
+    name = "formae-fly-basic-demo"
+    org = flyOrg
+  }
+  app
 
-    endpoint = new fly.Endpoint {
-      url = "https://api.fly.com"
-      port = 8080
-      protocol = "https"
+  // Secrets are injected into the machine's environment at boot. Anything
+  // sensitive belongs here rather than in the machine's `env`, which is visible
+  // in state and in `fly machine status`.
+  new fly.Secrets {
+    label = "demo-secrets"
+    appName = app.res.name
+    values {
+      ["GREETING_SECRET"] = formae.value("hello-from-formae").opaque
     }
+  }
 
-    tags = new Listing {
-      new fly.Tag { key = "Environment"; value = "development" }
-      new fly.Tag { key = "Team"; value = "platform" }
+  new fly.Machine {
+    label = "demo-machine"
+    appName = app.res.name
+    name = "demo-web"
+    region = flyRegion
+    image = "flyio/hellofly:latest"
+    guest = new fly.MachineGuest {
+      cpuKind = "shared"
+      cpus = 1
+      memoryMb = 256
     }
+    services {
+      new fly.MachineService {
+        internalPort = 8080
+        protocol = "tcp"
+        // fly-proxy stops the machine when it goes idle and starts it again on
+        // the next request. The plugin does not reconcile `state`, precisely so
+        // it does not fight this.
+        autostart = true
+        autostop = "stop"
+        ports {
+          new fly.MachinePort {
+            port = 443
+            handlers { "tls"; "http" }
+          }
+          new fly.MachinePort {
+            port = 80
+            handlers { "http" }
+            forceHttps = true
+          }
+        }
+      }
+    }
+  }
+
+  // Without an IP assignment the app is unreachable from the internet, no
+  // matter how many machines and services it has. `fly deploy` allocates these
+  // implicitly; the raw Machines API does not.
+  //
+  // shared_v4 and v6 are free. A dedicated "v4" is billable.
+  new fly.IPAddress {
+    label = "demo-ipv4"
+    appName = app.res.name
+    addressType = "shared_v4"
+  }
+
+  new fly.IPAddress {
+    label = "demo-ipv6"
+    appName = app.res.name
+    addressType = "v6"
   }
 }
