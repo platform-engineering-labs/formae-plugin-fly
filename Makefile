@@ -25,7 +25,12 @@ DEFAULT_TIMEOUT := 30
 # VERSION=0.88.1 to reproduce a specific run. Note the harness rewrites the
 # schema and testdata PklProject files to match this version for the duration of
 # the run, then restores them.
-CONFORMANCE_VERSION := $(if $(VERSION),FORMAE_VERSION=$(VERSION),)
+#
+# VERSION=latest is normalised to "unset". The harness parses FORMAE_VERSION as
+# a semver and calls t.Fatalf on anything else, so passing the literal string
+# "latest" through would abort the run — and "latest" is exactly what the CI
+# workflow's default input sends.
+CONFORMANCE_VERSION := $(if $(filter-out latest,$(VERSION)),FORMAE_VERSION=$(VERSION),)
 
 # Installation paths
 # Plugin discovery expects lowercase directory names matching the plugin name
