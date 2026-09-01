@@ -28,8 +28,16 @@ func TestEveryDeclaredTypeIsRegistered(t *testing.T) {
 		"FLY::Apps::Certificate",
 		"FLY::Apps::IPAddress",
 		"FLY::Apps::Machine",
+		"FLY::Apps::SecretKey",
 		"FLY::Apps::Secrets",
 		"FLY::Apps::Volume",
+		"FLY::Apps::VolumeSnapshot",
+		"FLY::Postgres::Attachment",
+		"FLY::Postgres::Backup",
+		"FLY::Postgres::Cluster",
+		"FLY::Postgres::Database",
+		"FLY::Postgres::Extension",
+		"FLY::Postgres::User",
 	}
 	got := registry.ResourceTypes()
 	sort.Strings(got)
@@ -47,14 +55,24 @@ func TestEveryDeclaredTypeIsRegistered(t *testing.T) {
 // registering it: formae plans it and the apply fails. App, Certificate and
 // IPAddress have no update path on the API.
 func TestTypesWithoutUpdatePathDoNotRegisterUpdate(t *testing.T) {
-	for _, rt := range []string{"FLY::Apps::App", "FLY::Apps::Certificate", "FLY::Apps::IPAddress"} {
+	noUpdate := []string{
+		"FLY::Apps::App", "FLY::Apps::Certificate", "FLY::Apps::IPAddress",
+		"FLY::Apps::VolumeSnapshot",
+		"FLY::Postgres::Cluster", "FLY::Postgres::Database",
+		"FLY::Postgres::Attachment", "FLY::Postgres::Extension",
+		"FLY::Postgres::Backup",
+	}
+	for _, rt := range noUpdate {
 		for _, op := range registry.GetOperations(rt) {
 			if op == resource.OperationUpdate {
 				t.Errorf("%s registers Update but the API has no update endpoint", rt)
 			}
 		}
 	}
-	for _, rt := range []string{"FLY::Apps::Machine", "FLY::Apps::Volume", "FLY::Apps::Secrets"} {
+	for _, rt := range []string{
+		"FLY::Apps::Machine", "FLY::Apps::Volume", "FLY::Apps::Secrets",
+		"FLY::Apps::SecretKey", "FLY::Postgres::User",
+	} {
 		found := false
 		for _, op := range registry.GetOperations(rt) {
 			if op == resource.OperationUpdate {

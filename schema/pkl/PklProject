@@ -10,9 +10,9 @@ amends "pkl:Project"
 // publish fails. `make build` / `make verify-schema` write VERSION locally.
 package {
   name = "fly"
-  baseUri = "package://localhost/plugins/fly/schema/pkl/fly"
+  baseUri = "package://hub.platform.engineering/plugins/fly/schema/pkl/fly"
   version = read("VERSION").text.trim()
-  packageZipUrl = "https://localhost/plugins/fly/schema/pkl/fly@\(version).zip"
+  packageZipUrl = "https://hub.platform.engineering/plugins/fly/schema/pkl/fly/fly@\(version).zip"
 }
 
 dependencies {

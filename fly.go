@@ -11,9 +11,10 @@ import (
 	"fmt"
 	"sync"
 
-	// Side-effect import: every FLY::Apps::* resource registers itself via
-	// init() at package load.
+	// Side-effect imports: every resource registers itself via init() at
+	// package load.
 	_ "github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/apps"
+	_ "github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/postgres"
 
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/prov"
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/registry"
@@ -131,10 +132,15 @@ func (p *Plugin) LabelConfig() model.LabelConfig {
 		DefaultQuery: "$.name",
 		ResourceOverrides: map[string]string{
 			// Certificates and IPs have no name; a Secrets bag is identified by
-			// the app it belongs to.
-			"FLY::Apps::Certificate": "$.hostname",
-			"FLY::Apps::IPAddress":   "$.ip",
-			"FLY::Apps::Secrets":     "$.appName",
+			// the app it belongs to; the Postgres children and the two snapshot
+			// -shaped resources are identified by whichever field is their key.
+			"FLY::Apps::Certificate":    "$.hostname",
+			"FLY::Apps::IPAddress":      "$.ip",
+			"FLY::Apps::Secrets":        "$.appName",
+			"FLY::Apps::VolumeSnapshot": "$.id",
+			"FLY::Postgres::User":       "$.username",
+			"FLY::Postgres::Attachment": "$.appName",
+			"FLY::Postgres::Backup":     "$.id",
 		},
 	}
 }

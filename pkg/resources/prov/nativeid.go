@@ -30,3 +30,20 @@ func ParseTwoPart(id string) (app, child string, err error) {
 func JoinTwoPart(app, child string) string {
 	return app + "/" + child
 }
+
+// ParseThreePart splits "{a}/{b}/{c}" into its three segments. Used by the
+// resources that hang two levels deep: a Postgres extension lives in a database
+// which lives in a cluster, and a volume snapshot lives in a volume which lives
+// in an app.
+func ParseThreePart(id string) (a, b, c string, err error) {
+	parts := strings.SplitN(id, "/", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", fmt.Errorf("native id must be {a}/{b}/{c}, got %q", id)
+	}
+	return parts[0], parts[1], parts[2], nil
+}
+
+// JoinThreePart formats a two-level-deep native id.
+func JoinThreePart(a, b, c string) string {
+	return a + "/" + b + "/" + c
+}

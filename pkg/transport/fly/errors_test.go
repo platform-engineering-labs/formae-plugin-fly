@@ -23,6 +23,7 @@ func TestClassifyStatus(t *testing.T) {
 		{401, resource.OperationErrorCodeInvalidCredentials},
 		{403, resource.OperationErrorCodeAccessDenied},
 		{404, resource.OperationErrorCodeNotFound},
+		{410, resource.OperationErrorCodeNotFound},
 		{409, resource.OperationErrorCodeAlreadyExists},
 		{412, resource.OperationErrorCodeInvalidRequest},
 		{422, resource.OperationErrorCodeInvalidRequest},
@@ -60,6 +61,9 @@ func TestIsNotFound(t *testing.T) {
 		want bool
 	}{
 		{"404", &APIError{StatusCode: 404}, true},
+		// Managed Postgres answers 410 for an already-deleted cluster or
+		// attachment; delete has to stay idempotent across that.
+		{"410 gone", &APIError{StatusCode: 410}, true},
 		{"404 wrapped", fmt.Errorf("read: %w", &APIError{StatusCode: 404}), true},
 		{"400 could not find app", &APIError{StatusCode: 400, Message: "could not find app"}, true},
 		{"400 App not found", &APIError{StatusCode: 400, Message: "App not found"}, true},

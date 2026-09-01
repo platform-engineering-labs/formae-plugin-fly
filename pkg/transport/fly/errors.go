@@ -81,7 +81,10 @@ func IsNotFound(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	if apiErr.StatusCode == 404 {
+	// 410 Gone: the Managed Postgres endpoints use it for a cluster or
+	// attachment that has already been deleted. Semantically identical to 404
+	// for our purposes — the thing is not there.
+	if apiErr.StatusCode == 404 || apiErr.StatusCode == 410 {
 		return true
 	}
 	if apiErr.StatusCode != 400 {
@@ -108,7 +111,9 @@ func ClassifyStatus(status int) resource.OperationErrorCode {
 	case status == 403:
 		// Valid token, insufficient scope — a read-only or app-scoped token.
 		return resource.OperationErrorCodeAccessDenied
-	case status == 404:
+	case status == 404, status == 410:
+		// 410 Gone is what the Managed Postgres endpoints return for an
+		// already-deleted cluster or attachment.
 		return resource.OperationErrorCodeNotFound
 	case status == 409:
 		return resource.OperationErrorCodeAlreadyExists

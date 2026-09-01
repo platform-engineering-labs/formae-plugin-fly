@@ -664,3 +664,425 @@ class IPAddress extends formae.Resource {
     @formae.FieldHint { hasProviderDefault = true }
     shared: Boolean?
 }
+
+// =============================================================================
+// FLY::Apps::VolumeSnapshot
+// =============================================================================
+
+/// A point-in-time snapshot of a Volume.
+/// Maps to POST /v1/apps/{app}/volumes/{volume}/snapshots.
+///
+/// Native id is `{appName}/{volumeId}/{id}`.
+///
+/// READ THIS FIRST. Fly exposes no delete endpoint for snapshots, so
+/// `formae destroy` reports success and the snapshot stays until it ages out
+/// under the volume's `snapshotRetention`. The id is server-assigned, so
+/// re-applying after a destroy takes a *new* snapshot rather than reconciling
+/// to the existing one. Volumes already snapshot themselves on a schedule when
+/// `autoBackupEnabled` is set — use this resource for an explicit snapshot at
+/// apply time (before a migration, say), not as a backup schedule.
+@formae.ResourceHint {
+    type = "FLY::Apps::VolumeSnapshot"
+    identifier = "$.id"
+    discoverable = true
+}
+class VolumeSnapshot extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::VolumeSnapshot"
+
+    /// App owning the volume. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    appName: String|formae.Resolvable
+
+    /// Volume to snapshot. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    volumeId: String|formae.Resolvable
+
+    /// Snapshot id, assigned by Fly. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    id: String?
+
+    /// Snapshot status. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    status: String?
+
+    /// Size in bytes. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    size: Int?
+
+    /// Content digest. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    digest: String?
+
+    /// RFC 3339 creation timestamp. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    createdAt: String?
+}
+
+// =============================================================================
+// FLY::Apps::SecretKey
+// =============================================================================
+
+/// App-scoped KMS key material backing Fly's encrypt / decrypt / sign / verify
+/// endpoints. Maps to POST /v1/apps/{app}/secretkeys/{name}.
+///
+/// This is NOT an environment-variable secret — that is `FLY::Apps::Secrets`.
+/// The crypto operations themselves are runtime verbs and are not modelled.
+///
+/// Native id is `{appName}/{name}`.
+@formae.ResourceHint {
+    type = "FLY::Apps::SecretKey"
+    identifier = "$.name"
+    discoverable = true
+}
+class SecretKey extends formae.Resource {
+    fixed hidden type: String = "FLY::Apps::SecretKey"
+
+    /// App that owns the key. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    appName: String|formae.Resolvable
+
+    /// Key name. Immutable — it is the key's identity server-side.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    name: String
+
+    /// Key type, e.g. "hs256", "nacl_auth". Fly picks a default when omitted.
+    @formae.FieldHint { hasProviderDefault = true }
+    keyType: String?
+
+    /// Base64-encoded key material. Write-only — the API never returns it.
+    ///
+    /// Omit it and Fly generates the key, which is the safer default and what
+    /// most callers want; supplying it means the material exists somewhere
+    /// outside Fly. Wrap it in `formae.value(x).opaque` if you do.
+    @formae.FieldHint { writeOnly = true }
+    value: (String|formae.Value)?
+
+    /// Base64 public key, for asymmetric key types. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    publicKey: String?
+
+    /// RFC 3339 creation timestamp. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    createdAt: String?
+}
+
+// =============================================================================
+// FLY::Postgres::Cluster
+// =============================================================================
+
+/// A connection endpoint on a Managed Postgres cluster. Output only.
+class PostgresEndpoint {
+    host: String?
+    port: Int?
+}
+
+/// Resolvable handle for `FLY::Postgres::Cluster` outputs. Reference these to
+/// wire a freshly created cluster into its databases, users and attachments in
+/// the same apply, e.g. `clusterId = db.res.id`.
+open class ClusterResolvable extends formae.Resolvable {
+    hidden type = "FLY::Postgres::Cluster"
+
+    hidden id:   ClusterResolvable = (this) { property = "id" }
+    hidden name: ClusterResolvable = (this) { property = "name" }
+}
+
+/// A Fly.io Managed Postgres cluster. Maps to POST /v1/postgres.
+///
+/// Org-scoped, not app-scoped: the native id is the bare cluster id.
+///
+/// Create is async and slow — the status walk is
+/// `creating → initializing → ready`, and `primaryEndpoint` is only populated
+/// once the cluster is ready, so anything needing a connection host must wait.
+/// Use `--watch`.
+///
+/// COSTS MONEY: a cluster is a real, always-on database. There is no free tier.
+@formae.ResourceHint {
+    type = "FLY::Postgres::Cluster"
+    identifier = "$.id"
+    discoverable = true
+}
+class Cluster extends formae.Resource {
+    fixed hidden type: String = "FLY::Postgres::Cluster"
+
+    local parent = this
+    hidden res: ClusterResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// Cluster name. Fly generates one when omitted. Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    name: String?
+
+    /// Organization slug that owns the cluster — the real slug, not the
+    /// "personal" alias. Falls back to the target's `org`. Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    org: String?
+
+    /// Fly region for the primary node. Immutable. Required.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    region: String
+
+    /// Plan slug selecting CPU, memory and disk: "basic", "starter", "launch",
+    /// "scale" or "Performance". The capital P on the last one is Fly's, not a
+    /// typo here. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    plan: String
+
+    /// Disk size in GB, 10–1000. Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    diskSizeGb: Int?
+
+    /// Postgres major version: "16" or "17". Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    pgMajorVersion: String?
+
+    /// Connection pooler mode: "session" or "transaction".
+    ///
+    /// Write-only: the API accepts it on create and never reports it back, so
+    /// reading it would mean inventing a value and diffing it would mean
+    /// permanent drift.
+    @formae.FieldHint { createOnly = true; writeOnly = true }
+    poolMode: String?
+
+    /// Enable PostGIS support. Required before PostGIS extensions can be
+    /// enabled. Immutable.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    postgisEnabled: Boolean?
+
+    /// Cluster id. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    id: String?
+
+    /// Lifecycle status: "creating", "initializing", "ready", "deleting",
+    /// "deleted", "failed". Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    status: String?
+
+    /// CPU class the plan resolved to. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    cpuKind: String?
+
+    /// vCPUs per node. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    cpus: Int?
+
+    /// Memory per node in MB. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    memoryMb: Int?
+
+    /// Replica count. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    replicas: Int?
+
+    /// Direct (unpooled) primary endpoint. Populated once ready. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    primaryEndpoint: PostgresEndpoint?
+
+    /// Pooled primary endpoint, through PgBouncer. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    poolerEndpoint: PostgresEndpoint?
+}
+
+// =============================================================================
+// FLY::Postgres::Database
+// =============================================================================
+
+/// Resolvable handle for `FLY::Postgres::Database` outputs. An Extension must
+/// reference its database through this rather than naming it as a string —
+/// otherwise formae only knows the extension depends on the *cluster*, and can
+/// try to enable it before the database exists.
+open class DatabaseResolvable extends formae.Resolvable {
+    hidden type = "FLY::Postgres::Database"
+
+    hidden name: DatabaseResolvable = (this) { property = "name" }
+}
+
+/// A database inside a Managed Postgres cluster.
+/// Native id is `{clusterId}/{name}`.
+@formae.ResourceHint {
+    type = "FLY::Postgres::Database"
+    identifier = "$.name"
+    discoverable = true
+}
+class Database extends formae.Resource {
+    fixed hidden type: String = "FLY::Postgres::Database"
+
+    local parent = this
+    hidden res: DatabaseResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+
+    /// Cluster that holds the database. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    clusterId: String|formae.Resolvable
+
+    /// Database name. Immutable — the API offers no rename.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    name: String
+}
+
+// =============================================================================
+// FLY::Postgres::User
+// =============================================================================
+
+/// A role inside a Managed Postgres cluster.
+/// Native id is `{clusterId}/{username}`.
+///
+/// The generated password is deliberately not exposed. Create does not return
+/// it, and the plugin does not call the endpoint that would reveal it: pulling
+/// a live database password into formae's state to fill an output field is a
+/// worse trade than fetching it with `fly mpg` when you need it.
+@formae.ResourceHint {
+    type = "FLY::Postgres::User"
+    identifier = "$.username"
+    discoverable = true
+}
+class User extends formae.Resource {
+    fixed hidden type: String = "FLY::Postgres::User"
+
+    /// Cluster that holds the user. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    clusterId: String|formae.Resolvable
+
+    /// User name. Immutable — it is the user's identity.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    username: String
+
+    /// Role: "schema_admin", "writer" or "reader". The one mutable field.
+    @formae.FieldHint { requiredOnCreate = true }
+    role: String
+}
+
+// =============================================================================
+// FLY::Postgres::Attachment
+// =============================================================================
+
+/// Attaches a Fly app to a Managed Postgres cluster.
+/// Native id is `{clusterId}/{appName}`.
+///
+/// Attaching provisions a database and a user for the app and injects a
+/// DATABASE_URL secret into it. That secret is created by Fly, not by this
+/// plugin — do not also declare it in a `FLY::Apps::Secrets` bag, or the two
+/// will fight over the same key.
+@formae.ResourceHint {
+    type = "FLY::Postgres::Attachment"
+    identifier = "$.appName"
+    discoverable = true
+}
+class Attachment extends formae.Resource {
+    fixed hidden type: String = "FLY::Postgres::Attachment"
+
+    /// Cluster to attach to. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    clusterId: String|formae.Resolvable
+
+    /// App to attach. Immutable. Both ends are the attachment's identity.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    appName: String|formae.Resolvable
+}
+
+// =============================================================================
+// FLY::Postgres::Extension
+// =============================================================================
+
+/// A Postgres extension enabled in one database.
+/// Native id is `{clusterId}/{databaseName}/{name}`.
+///
+/// The API's list endpoint returns every extension the cluster *offers*, each
+/// with an `installed` object that is null when it is not enabled — so
+/// "exists" here means installed, not merely listed.
+@formae.ResourceHint {
+    type = "FLY::Postgres::Extension"
+    identifier = "$.name"
+    discoverable = true
+}
+class Extension extends formae.Resource {
+    fixed hidden type: String = "FLY::Postgres::Extension"
+
+    /// Cluster holding the database. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    clusterId: String|formae.Resolvable
+
+    /// Database to enable the extension in. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    databaseName: String|formae.Resolvable
+
+    /// Extension name, e.g. "citext", "postgis". Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    name: String
+
+    /// Schema to install into. Defaults to the database's default schema.
+    @formae.FieldHint { createOnly = true; hasProviderDefault = true }
+    schema: String?
+
+    /// Create the schema first if it does not exist.
+    ///
+    /// Write-only: it is an instruction for the create call, not a property of
+    /// the extension, and the API never reports it back.
+    @formae.FieldHint { createOnly = true; writeOnly = true }
+    createSchema: Boolean?
+
+    /// Installed version. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    version: String?
+
+    /// Whether this is a system extension that cannot be disabled. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    system: Boolean?
+}
+
+// =============================================================================
+// FLY::Postgres::Backup
+// =============================================================================
+
+/// A backup of a Managed Postgres cluster.
+/// Native id is `{clusterId}/{id}`.
+///
+/// READ THIS FIRST — a backup is closer to an event than to infrastructure:
+///
+/// - Fly exposes no delete endpoint. `formae destroy` reports success and the
+///   backup remains until it expires under the cluster's retention policy.
+/// - The id is server-assigned, so a forma cannot name one. Re-applying after
+///   a destroy takes a *new* backup rather than reconciling to the existing
+///   one.
+///
+/// It is modelled because some pipelines want "take a backup at apply time".
+/// For scheduled backups, use the cluster's retention policy instead.
+@formae.ResourceHint {
+    type = "FLY::Postgres::Backup"
+    identifier = "$.id"
+    discoverable = true
+}
+class Backup extends formae.Resource {
+    fixed hidden type: String = "FLY::Postgres::Backup"
+
+    /// Cluster to back up. Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    clusterId: String|formae.Resolvable
+
+    /// Backup type: "full", "incr" or "diff". Immutable.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    backupType: String
+
+    /// Backup id, assigned by Fly. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    id: String?
+
+    /// Backup status. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    status: String?
+
+    /// Size in bytes. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    sizeBytes: Int?
+
+    /// RFC 3339 start timestamp. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    startedAt: String?
+
+    /// RFC 3339 finish timestamp. Output only.
+    @formae.FieldHint { hasProviderDefault = true }
+    finishedAt: String?
+}

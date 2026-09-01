@@ -1,0 +1,67 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: update the Postgres resources.
+//
+// `role` on FLY::Postgres::User is the only mutable field anywhere in the
+// Managed Postgres surface — cluster plan, disk size and version are all
+// createOnly, a database has only its name, an attachment is both its ends, and
+// an extension is enable-or-disable. So this variant changes exactly that one
+// field, from writer to reader, and leaves everything else identical.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local cluster = new fly.Cluster {
+    label = "plugin-sdk-test-pg"
+    name = "formae-sdk-test-pg-\(v.testRunID)"
+    org = v.org
+    region = v.region
+    plan = "basic"
+    diskSizeGb = 10
+    pgMajorVersion = "17"
+    poolMode = "transaction"
+  }
+  cluster
+
+  local database = new fly.Database {
+    label = "plugin-sdk-test-pg-db"
+    clusterId = cluster.res.id
+    name = "sdk_test_db"
+  }
+  database
+
+  new fly.User {
+    label = "plugin-sdk-test-pg-user"
+    clusterId = cluster.res.id
+    username = "sdk_test_user"
+    role = "reader"                  // CHANGED — the one mutable field
+  }
+
+  new fly.Extension {
+    label = "plugin-sdk-test-pg-ext"
+    clusterId = cluster.res.id
+    databaseName = database.res.name
+    name = "citext"
+  }
+
+  local app = new fly.App {
+    label = "plugin-sdk-test-pg-app"
+    name = "\(v.appName)-pg"
+    org = v.org
+  }
+  app
+
+  new fly.Attachment {
+    label = "plugin-sdk-test-pg-attach"
+    clusterId = cluster.res.id
+    appName = app.res.name
+  }
+}

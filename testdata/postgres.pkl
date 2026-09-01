@@ -1,0 +1,81 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: FLY::Postgres::Cluster and its children.
+//
+// BILLABLE, AND THE MOST EXPENSIVE TEST IN THE SUITE. A Managed Postgres
+// cluster is a real always-on database with no free tier. This uses the
+// smallest configuration Fly offers — plan "basic", the 10 GB disk minimum —
+// and destroys it in the same test.
+//
+// One forma covers Cluster, Database, User, Extension, Attachment and the App
+// the attachment needs, deliberately: the cluster is the expensive part, so
+// paying for one and hanging every child off it beats five separate test cases
+// each provisioning their own.
+//
+// Cluster create is async and SLOW: the status walk is
+// creating -> initializing -> ready and takes several minutes.
+//
+//   make conformance-test TEST=postgres TIMEOUT=25
+//
+// Everything downstream waits on the cluster because each child references
+// `cluster.res.id`, so formae orders the whole graph from that one handle.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local cluster = new fly.Cluster {
+    label = "plugin-sdk-test-pg"
+    name = "formae-sdk-test-pg-\(v.testRunID)"
+    org = v.org
+    region = v.region
+    plan = "basic"
+    diskSizeGb = 10          // the API's minimum
+    pgMajorVersion = "17"
+    poolMode = "transaction"
+  }
+  cluster
+
+  local database = new fly.Database {
+    label = "plugin-sdk-test-pg-db"
+    clusterId = cluster.res.id
+    name = "sdk_test_db"
+  }
+  database
+
+  new fly.User {
+    label = "plugin-sdk-test-pg-user"
+    clusterId = cluster.res.id
+    username = "sdk_test_user"
+    role = "writer"
+  }
+
+  // citext is small, universally available, and does not need PostGIS.
+  new fly.Extension {
+    label = "plugin-sdk-test-pg-ext"
+    clusterId = cluster.res.id
+    databaseName = database.res.name
+    name = "citext"
+  }
+
+  // Attaching needs an app to attach. Apps are free.
+  local app = new fly.App {
+    label = "plugin-sdk-test-pg-app"
+    name = "\(v.appName)-pg"
+    org = v.org
+  }
+  app
+
+  new fly.Attachment {
+    label = "plugin-sdk-test-pg-attach"
+    clusterId = cluster.res.id
+    appName = app.res.name
+  }
+}

@@ -18,6 +18,10 @@
 #
 # Optional:
 #   TEST_PREFIX      default "formae-sdk-test-". Must match testdata/config/vars.pkl.
+#
+# Cleans two things: apps (which cascade to machines, volumes, secrets, certs
+# and IPs) and Managed Postgres clusters, which are org-scoped and therefore
+# survive app deletion.
 #   FLY_API_BASE     default https://api.machines.dev
 #
 # Idempotent. Exits 0 when credentials are absent so a contributor without a Fly
@@ -52,6 +56,37 @@ auth_curl() {
     "$@"
 }
 
+# Managed Postgres clusters are NOT app-scoped, so deleting apps does not touch
+# them — and a leaked cluster is the most expensive thing this suite can strand:
+# a real always-on database with no free tier, billing until someone removes it.
+#
+# Deleted clusters linger in the listing with status "deleted" / a deleted_at
+# stamp, so those are skipped rather than re-deleted.
+clean_postgres_clusters() {
+  echo "  postgres clusters..."
+  local json
+  if ! json="$(auth_curl "${API_BASE}/v1/postgres?org_slug=${FLY_ORG}")"; then
+    echo "    ERROR: could not list Postgres clusters — a leaked cluster may still be billing." >&2
+    echo "    Response: ${json}" >&2
+    return 0
+  fi
+  local ids
+  ids="$(printf '%s' "${json}" | jq -r --arg p "${TEST_PREFIX}" \
+    '.data[]? | select(.name != null) | select(.name | startswith($p))
+     | select(.status != "deleted" and .status != "deleting")
+     | select(.deleted_at == null) | .id' || true)"
+  if [[ -z "${ids}" ]]; then
+    echo "    no leftover test clusters"
+    return 0
+  fi
+  while IFS= read -r id; do
+    [[ -z "${id}" ]] && continue
+    echo "    DELETE postgres cluster ${id}"
+    auth_curl -X DELETE "${API_BASE}/v1/postgres/${id}" >/dev/null || \
+      echo "      warning: delete failed for ${id}, continuing" >&2
+  done <<< "${ids}"
+}
+
 echo "clean-environment.sh: cleaning apps in org '${FLY_ORG}' with prefix '${TEST_PREFIX}'"
 
 # GET /v1/apps requires org_slug; without it the API answers 404 rather than
@@ -72,6 +107,7 @@ names="$(printf '%s' "${apps_json}" | jq -r --arg p "${TEST_PREFIX}" \
 
 if [[ -z "${names}" ]]; then
   echo "  no leftover test apps"
+  clean_postgres_clusters
   echo "clean-environment.sh: done"
   exit 0
 fi
@@ -84,5 +120,7 @@ while IFS= read -r name; do
   auth_curl -X DELETE "${API_BASE}/v1/apps/${name}" >/dev/null || \
     echo "    warning: delete failed for ${name}, continuing" >&2
 done <<< "${names}"
+
+clean_postgres_clusters
 
 echo "clean-environment.sh: done"
