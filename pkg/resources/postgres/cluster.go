@@ -250,7 +250,11 @@ func (c *Cluster) Status(ctx context.Context, req *resource.StatusRequest) (*res
 	}
 	switch api.Status {
 	case clusterStatusReady:
-		return prov.SuccessStatus(id), nil
+		// Same reason as Machine: Create returned InProgress, so this is where
+		// formae first learns the cluster's endpoints and sizing. A
+		// `cluster.res.id` reference stays unresolvable until it does — and the
+		// endpoints only exist once the cluster is ready anyway.
+		return prov.SuccessStatusWithProps(id, api.toProps()), nil
 	case clusterStatusCreating, clusterStatusInitializing:
 		return prov.InProgressStatus(id, "cluster is "+api.Status), nil
 	case clusterStatusFailed:

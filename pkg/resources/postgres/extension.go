@@ -86,7 +86,10 @@ func (e *Extension) Create(ctx context.Context, req *resource.CreateRequest) (*r
 	}, nil); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(prov.JoinThreePart(p.ClusterID, p.DatabaseName, p.Name)), nil
+	// createSchema is write-only and is dropped from the stored properties.
+	stored := p
+	stored.CreateSchema = nil
+	return prov.SuccessCreate(prov.JoinThreePart(p.ClusterID, p.DatabaseName, p.Name), stored), nil
 }
 
 func (e *Extension) Read(ctx context.Context, req *resource.ReadRequest) (*resource.ReadResult, error) {

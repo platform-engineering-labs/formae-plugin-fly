@@ -145,7 +145,22 @@ func (a *App) Create(ctx context.Context, req *resource.CreateRequest) (*resourc
 	}, nil); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(p.Name), nil
+	// Read back rather than echoing the request. Formae stores exactly what
+	// Create returns and resolves `app.res.id` against it, and `id` only exists
+	// server-side. One extra GET buys a working resolvable; if it fails the
+	// create still succeeded, so fall back to what we know.
+	if api, err := a.get(ctx, p.Name); err == nil {
+		return prov.SuccessCreate(p.Name, api.toProps()), nil
+	}
+	return prov.SuccessCreate(p.Name, p), nil
+}
+
+func (a *App) get(ctx context.Context, name string) (appAPI, error) {
+	var apiResp appAPI
+	err := a.Client.Do(ctx, flytransport.Request{
+		Method: "GET", Path: "/v1/apps/" + name,
+	}, &apiResp)
+	return apiResp, err
 }
 
 // resolveOrgSlug best-effort looks up the token's own organization slug, so the

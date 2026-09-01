@@ -73,7 +73,7 @@ func (a *Attachment) Create(ctx context.Context, req *resource.CreateRequest) (*
 	}, nil); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, p.AppName)), nil
+	return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, p.AppName), p), nil
 }
 
 // Read checks the cluster's attached_apps list: there is no per-attachment GET.

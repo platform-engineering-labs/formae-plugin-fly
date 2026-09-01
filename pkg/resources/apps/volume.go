@@ -148,7 +148,7 @@ func (v *Volume) Create(ctx context.Context, req *resource.CreateRequest) (*reso
 	}
 	// Provisioning is fast and the response already carries the volume, so
 	// there is nothing to poll for.
-	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, apiResp.ID)), nil
+	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, apiResp.ID), apiResp.toProps(p.AppName)), nil
 }
 
 func (v *Volume) Read(ctx context.Context, req *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -216,7 +216,7 @@ func (v *Volume) Update(ctx context.Context, req *resource.UpdateRequest) (*reso
 			return prov.FailUpdate(flytransport.ClassifyError(err), err.Error()), nil
 		}
 	}
-	return prov.SuccessUpdate(req.NativeID), nil
+	return prov.SuccessUpdate(req.NativeID, desired), nil
 }
 
 func (v *Volume) Delete(ctx context.Context, req *resource.DeleteRequest) (*resource.DeleteResult, error) {

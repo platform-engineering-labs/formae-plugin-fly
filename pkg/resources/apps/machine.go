@@ -411,7 +411,12 @@ func (m *Machine) Status(ctx context.Context, req *resource.StatusRequest) (*res
 		// stopped and suspended are resting states, not failures: a machine
 		// with autostop, or a worker created with skip_launch, legitimately
 		// settles there.
-		return prov.SuccessStatus(nativeID), nil
+		//
+		// The properties ride along here because Create returned InProgress
+		// with nothing to store — this is the only point at which formae learns
+		// the machine's id, state and private IP, and until it does every
+		// `machine.res.*` reference is unresolvable.
+		return prov.SuccessStatusWithProps(nativeID, apiResp.toProps(app)), nil
 	case machineStateCreated, machineStateStarting, machineStateStopping, machineStateReplacing:
 		return prov.InProgressStatus(nativeID, "machine is "+apiResp.State), nil
 	case machineStateFailed:

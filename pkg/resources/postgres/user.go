@@ -75,7 +75,7 @@ func (u *User) Create(ctx context.Context, req *resource.CreateRequest) (*resour
 	}, nil); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, p.Username)), nil
+	return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, p.Username), p), nil
 }
 
 // Read scans the cluster's user list: there is no per-user GET.
@@ -121,7 +121,9 @@ func (u *User) Update(ctx context.Context, req *resource.UpdateRequest) (*resour
 	}, nil); err != nil {
 		return prov.FailUpdate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessUpdate(req.NativeID), nil
+	return prov.SuccessUpdate(req.NativeID, UserProperties{
+		ClusterID: cluster, Username: username, Role: desired.Role,
+	}), nil
 }
 
 func (u *User) Delete(ctx context.Context, req *resource.DeleteRequest) (*resource.DeleteResult, error) {

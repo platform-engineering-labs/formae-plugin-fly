@@ -130,7 +130,7 @@ No `FLY::Apps::App` **U**: the REST API exposes no app-update endpoint. Every Ap
 is `createOnly`; a change replaces the app. Same for Certificate and IPAddress — both are
 create-or-destroy only server-side.
 
-### Postgres (Managed Postgres) — P2
+### Postgres (Managed Postgres) — implemented
 
 The single largest unclaimed area: 22 REST operations, and `/v1/postgres` is a *newer*
 top-level REST group (not app-scoped), confirmed live (unauthenticated `GET /v1/postgres`
@@ -138,12 +138,14 @@ returns `{"error":"Organization not found"}` — the route exists).
 
 | Resource type | Transport | Endpoint | CRUD | P | Modeled by |
 |---------------|-----------|----------|------|---|------------|
-| `FLY::Postgres::Cluster` | REST | `/v1/postgres[/{id}]` | C R D L | P2 | `stategraph` (`fly_mpg_cluster`) |
-| `FLY::Postgres::Database` | REST | `/v1/postgres/{id}/databases[/{name}]` | C R D L | P2 | `stategraph` (`fly_mpg_database`) |
-| `FLY::Postgres::User` | REST | `/v1/postgres/{id}/users[/{name}]` | C R U D L | P2 | `stategraph` (`fly_mpg_user`) |
-| `FLY::Postgres::Attachment` | REST | `/v1/postgres/{id}/attachments[/{app}]` | C R D | P2 | `stategraph` (`fly_mpg_attachment`) |
-| `FLY::Postgres::Extension` | REST | `/v1/postgres/{id}/databases/{db}/extensions` | C R D L | P3 | — |
-| `FLY::Postgres::Backup` | REST | `/v1/postgres/{id}/backups` | C R L | P3 | — |
+| `FLY::Postgres::Cluster` | REST | `/v1/postgres[/{id}]` | C R D L | P1 | `stategraph` (`fly_mpg_cluster`) |
+| `FLY::Postgres::Database` | REST | `/v1/postgres/{id}/databases[/{name}]` | C R D L | P1 | `stategraph` (`fly_mpg_database`) |
+| `FLY::Postgres::User` | REST | `/v1/postgres/{id}/users[/{name}]` | C R U D L | P1 | `stategraph` (`fly_mpg_user`) |
+| `FLY::Postgres::Attachment` | REST | `/v1/postgres/{id}/attachments[/{app}]` | C R D L | P1 | `stategraph` (`fly_mpg_attachment`) |
+| `FLY::Postgres::Extension` | REST | `/v1/postgres/{id}/databases/{db}/extensions` | C R D L | P1 | — |
+| `FLY::Postgres::Backup` | REST | `/v1/postgres/{id}/backups` | C R **D\*** L | P1 | — |
+
+**\*** Backup has no delete endpoint — see "Resources that cannot be deleted" below.
 
 `Cluster` create is genuinely async: `status` walks
 `creating → initializing → ready` (also `deleting`/`deleted`/`failed`), and `endpoints`
@@ -151,12 +153,27 @@ is only populated at `ready`. `plan` is one of `basic|starter|launch|scale|Perfo
 (the capital *P* is in the spec — not a typo on our side), `pg_major_version` `16|17`,
 `disk_size_gb` 10–1000.
 
-### Volume snapshots, secret keys — P2/P3
+### Volume snapshots, secret keys — implemented
 
 | Resource type | Transport | Endpoint | CRUD | P | Modeled by |
 |---------------|-----------|----------|------|---|------------|
-| `FLY::Apps::VolumeSnapshot` | REST | `/v1/apps/{app}/volumes/{id}/snapshots` | C R L | P2 | `stategraph` (`fly_volume_snapshot`) |
-| `FLY::Apps::SecretKey` | REST | `/v1/apps/{app}/secretkeys[/{name}]` | C R U D L | P3 | — |
+| `FLY::Apps::VolumeSnapshot` | REST | `/v1/apps/{app}/volumes/{id}/snapshots` | C R **D\*** L | P1 | `stategraph` (`fly_volume_snapshot`) |
+| `FLY::Apps::SecretKey` | REST | `/v1/apps/{app}/secretkeys[/{name}]` | C R U D L | P1 | — |
+
+### Resources that cannot be deleted
+
+`FLY::Postgres::Backup` and `FLY::Apps::VolumeSnapshot` have **no delete endpoint**.
+Fly offers no way to remove either; both expire under a retention policy. Their `Delete`
+therefore reports Success with a `StatusMessage` saying the artifact remains — failing
+would wedge every `formae destroy` containing one, and bare success would hide it.
+
+Both are also server-id-assigned, so a forma cannot name one: re-applying after a destroy
+takes a *new* backup or snapshot rather than reconciling to the existing one. They suit
+"take a backup at apply time" in a pipeline; for scheduled protection use the cluster's
+retention policy or the volume's `autoBackupEnabled`.
+
+This is the declarative REST surface exhausted. Everything still unimplemented needs a
+GraphQL client.
 
 `SecretKey` is a different thing from `Secrets`: it is app-scoped KMS key material used by
 the `encrypt`/`decrypt`/`sign`/`verify` endpoints, not an env-var secret.

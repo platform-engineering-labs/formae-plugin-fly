@@ -28,6 +28,9 @@ func TestAppCreateIsSyncAndUsesRequestedNameAsNativeID(t *testing.T) {
 		// and echoes neither name nor org, so the native id has to be the name
 		// we sent.
 		"POST /v1/apps": {201, `{"id":"pxovqy22k4ey1j2k","created_at":1788245238000}`},
+		// Create reads back so the stored properties carry id and status —
+		// see TestCreateReturnsPropertiesForResolvables.
+		"GET /v1/apps/formae-test-app": {200, `{"id":"pxovqy22k4ey1j2k","name":"formae-test-app","status":"pending","organization":{"slug":"my-org"}}`},
 	})
 	res, err := a.Create(context.Background(), &resource.CreateRequest{
 		ResourceType: ResourceTypeApp,
@@ -45,12 +48,66 @@ func TestAppCreateIsSyncAndUsesRequestedNameAsNativeID(t *testing.T) {
 	if res.ProgressResult.NativeID != "formae-test-app" {
 		t.Errorf("NativeID = %q, want the app name", res.ProgressResult.NativeID)
 	}
-	c := s.only()
+	c := s.calls[0]
 	if c.Body["app_name"] != nil {
 		t.Errorf("body carries app_name; the spec's CreateAppRequest field is name: %+v", c.Body)
 	}
 	if c.Body["name"] != "formae-test-app" || c.Body["org_slug"] != "my-org" {
 		t.Errorf("body = %+v", c.Body)
+	}
+}
+
+// The bug this guards against cost a full conformance run to find. Formae
+// resolves `app.res.name` against the properties stored for the App, and it
+// stores exactly what Create returns — it does not call Read first. A Create
+// that reports only a NativeID logs "No properties to split for resource" and
+// every resolvable pointing at it then fails with NotFound until the consuming
+// operation gives up.
+func TestCreateReturnsPropertiesForResolvables(t *testing.T) {
+	a, _ := newApp(t, map[string]route{
+		"POST /v1/apps":                {201, `{"id":"pxovqy22k4ey1j2k","created_at":1}`},
+		"GET /v1/apps/formae-test-app": {200, `{"id":"pxovqy22k4ey1j2k","name":"formae-test-app","status":"pending","organization":{"slug":"my-org"}}`},
+	})
+	res, err := a.Create(context.Background(), &resource.CreateRequest{
+		ResourceType: ResourceTypeApp,
+		Properties:   mustJSON(t, map[string]any{"name": "formae-test-app", "org": "my-org"}),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	raw := res.ProgressResult.ResourceProperties
+	if len(raw) == 0 {
+		t.Fatal("Create returned no ResourceProperties; every resolvable on this resource would fail with NotFound")
+	}
+	props := decodeProps(t, string(raw))
+	// Both documented resolvables must be resolvable.
+	if props["name"] != "formae-test-app" {
+		t.Errorf("props[name] = %v — app.res.name would not resolve", props["name"])
+	}
+	if props["id"] != "pxovqy22k4ey1j2k" {
+		t.Errorf("props[id] = %v — app.res.id would not resolve", props["id"])
+	}
+}
+
+// The read-back is a convenience, not a correctness requirement: the create
+// already succeeded, so a failed read must not fail the create.
+func TestCreateFallsBackWhenReadBackFails(t *testing.T) {
+	a, _ := newApp(t, map[string]route{
+		"POST /v1/apps":                {201, `{"id":"x","created_at":1}`},
+		"GET /v1/apps/formae-test-app": {500, `{"error":"boom"}`},
+	})
+	res, err := a.Create(context.Background(), &resource.CreateRequest{
+		Properties: mustJSON(t, map[string]any{"name": "formae-test-app", "org": "my-org"}),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if res.ProgressResult.OperationStatus != resource.OperationStatusSuccess {
+		t.Fatal("a failed read-back must not fail a create that succeeded")
+	}
+	props := decodeProps(t, string(res.ProgressResult.ResourceProperties))
+	if props["name"] != "formae-test-app" {
+		t.Errorf("fallback props must still carry name: %+v", props)
 	}
 }
 

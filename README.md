@@ -89,6 +89,8 @@ would make applies behave differently depending on where the agent runs.
 
 ## Supported resources
 
+### Apps
+
 | Resource type | CRUD | Notes |
 |---------------|------|-------|
 | `FLY::Apps::App` | C R D L | Free. Every field is `createOnly`: the API has no app-update endpoint. |
@@ -97,9 +99,30 @@ would make applies behave differently depending on where the agent runs.
 | `FLY::Apps::Secrets` | C R U D L | One resource per app, holding the whole bag. Values are write-only. |
 | `FLY::Apps::Certificate` | C R D L | ACME for a custom hostname. Create does not wait for DNS validation. |
 | `FLY::Apps::IPAddress` | C R D L | Required for the app to be reachable at all. `shared_v4` and `v6` are free. |
+| `FLY::Apps::VolumeSnapshot` | C R D\* L | Explicit snapshot at apply time. **Cannot be deleted** — see below. |
+| `FLY::Apps::SecretKey` | C R U D L | App-scoped KMS key material. Not env-var secrets — that is `Secrets`. |
+
+### Managed Postgres
+
+| Resource type | CRUD | Notes |
+|---------------|------|-------|
+| `FLY::Postgres::Cluster` | C R D L | **A real always-on database, no free tier.** Create is async and slow. |
+| `FLY::Postgres::Database` | C R D L | |
+| `FLY::Postgres::User` | C R U D L | `role` is the only mutable field in the whole Postgres surface. |
+| `FLY::Postgres::Attachment` | C R D L | Attaching injects a `DATABASE_URL` secret into the app — don't also declare it. |
+| `FLY::Postgres::Extension` | C R D L | "Exists" means installed; the API lists the whole catalogue. |
+| `FLY::Postgres::Backup` | C R D\* L | Backup at apply time. **Cannot be deleted** — see below. |
+
+**\* Two resources cannot be deleted.** Fly exposes no delete endpoint for
+`VolumeSnapshot` or `Postgres::Backup`; both expire under a retention policy. Their
+delete reports success and says so in the status message — failing would wedge every
+`formae destroy` containing one. Both are server-id-assigned, so re-applying after a
+destroy takes a *new* artifact rather than reconciling to the existing one.
 
 Everything above is the Machines REST API (`api.machines.dev`) — one transport, no
-GraphQL. See [docs/RESOURCES.md](docs/RESOURCES.md) for the full API catalog, what is
+GraphQL. That is the declarative REST surface exhausted; what remains unimplemented
+(organizations, WireGuard peers, egress IPs, Upstash Redis, Tigris buckets, tokens) is
+GraphQL-only. See [docs/RESOURCES.md](docs/RESOURCES.md) for the full API catalog, what is
 coming next (Managed Postgres is the big one, 22 REST operations), and what is
 GraphQL-only. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) records the decisions.
 
@@ -232,7 +255,8 @@ export FLY_TEST_REGION=fra        # optional, defaults to fra
 make conformance-test TEST=app                    # free, seconds
 make conformance-test TEST=secrets                # free, seconds
 make conformance-test TEST=machine TIMEOUT=15     # BILLABLE, async, needs the timeout
-make conformance-test TIMEOUT=15                  # all three
+make conformance-test TEST=postgres TIMEOUT=30    # MOST EXPENSIVE: a real database
+make conformance-test TIMEOUT=30                  # everything
 ```
 
 `TIMEOUT` is in **minutes**, matching the documented convention. The Makefile appends the

@@ -202,3 +202,40 @@ func TestClusterUpdateIsNotUpdatable(t *testing.T) {
 		t.Error("Update hit the API")
 	}
 }
+
+// Cluster's Create returns InProgress with nothing to store, so Status is the
+// only place formae learns the cluster's id and endpoints. Without them every
+// `cluster.res.id` reference — which is how the database, user, extension and
+// attachment all hang off the cluster — fails to resolve.
+func TestClusterStatusReadyCarriesProperties(t *testing.T) {
+	c, _ := newCluster(t, map[string]route{
+		"GET /v1/postgres/pgc_x": {200, `{"data":{"id":"pgc_x","name":"db","status":"ready",
+			"endpoints":{"primary":{"direct":{"host":"h","port":5432}}}}}`},
+	})
+	res, err := c.Status(context.Background(), &resource.StatusRequest{RequestID: "pgc_x"})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	raw := res.ProgressResult.ResourceProperties
+	if len(raw) == 0 {
+		t.Fatal("ready Status returned no properties; cluster.res.id would never resolve")
+	}
+	props := decodeProps(t, string(raw))
+	if props["id"] != "pgc_x" || props["status"] != "ready" {
+		t.Errorf("props = %+v", props)
+	}
+	if props["primaryEndpoint"] == nil {
+		t.Error("endpoints must be carried: they only exist once the cluster is ready")
+	}
+}
+
+// Still converging: nothing to store yet, and that is correct.
+func TestClusterStatusInProgressCarriesNoProperties(t *testing.T) {
+	c, _ := newCluster(t, map[string]route{
+		"GET /v1/postgres/pgc_x": {200, `{"data":{"id":"pgc_x","status":"creating"}}`},
+	})
+	res, _ := c.Status(context.Background(), &resource.StatusRequest{RequestID: "pgc_x"})
+	if res.ProgressResult.OperationStatus != resource.OperationStatusInProgress {
+		t.Fatalf("status = %v", res.ProgressResult.OperationStatus)
+	}
+}

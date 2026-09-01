@@ -118,7 +118,8 @@ func (v *VolumeSnapshot) Create(ctx context.Context, req *resource.CreateRequest
 	}
 	for _, s := range after {
 		if _, known := seen[s.ID]; !known && s.ID != "" {
-			return prov.SuccessCreate(prov.JoinThreePart(p.AppName, p.VolumeID, s.ID)), nil
+			return prov.SuccessCreate(prov.JoinThreePart(p.AppName, p.VolumeID, s.ID),
+				s.toProps(p.AppName, p.VolumeID)), nil
 		}
 	}
 	return prov.FailCreate(resource.OperationErrorCodeServiceInternalError,

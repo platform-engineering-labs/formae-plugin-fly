@@ -146,7 +146,8 @@ func (c *Certificate) Create(ctx context.Context, req *resource.CreateRequest) (
 	}, &apiResp); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, p.Hostname)), nil
+	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, p.Hostname),
+		apiResp.toProps(p.AppName, p.Hostname)), nil
 }
 
 func (c *Certificate) Read(ctx context.Context, req *resource.ReadRequest) (*resource.ReadResult, error) {

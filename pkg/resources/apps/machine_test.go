@@ -403,3 +403,25 @@ func TestMachineListWithoutOrgIsEmpty(t *testing.T) {
 		t.Errorf("NativeIDs = %v, calls = %d", res.NativeIDs, len(s.calls))
 	}
 }
+
+// Machine's Create returns InProgress, so Status is where formae first learns
+// the machine's id, state and private IP. Without them `machine.res.privateIp`
+// and friends are unresolvable.
+func TestMachineStatusStartedCarriesProperties(t *testing.T) {
+	m, _ := newMachine(t, map[string]route{
+		"GET /v1/apps/my-api/machines/abc": {200, `{"id":"abc","name":"api-1","region":"fra",
+			"state":"started","private_ip":"fdaa:0:1::3","config":{"image":"img"}}`},
+	})
+	res, err := m.Status(context.Background(), &resource.StatusRequest{RequestID: "my-api/abc"})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	raw := res.ProgressResult.ResourceProperties
+	if len(raw) == 0 {
+		t.Fatal("started Status returned no properties; machine resolvables would never resolve")
+	}
+	props := decodeProps(t, string(raw))
+	if props["id"] != "abc" || props["privateIp"] != "fdaa:0:1::3" || props["appName"] != "my-api" {
+		t.Errorf("props = %+v", props)
+	}
+}

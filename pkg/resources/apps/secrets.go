@@ -92,7 +92,10 @@ func (s *Secrets) Create(ctx context.Context, req *resource.CreateRequest) (*res
 	if err := s.bulkSet(ctx, p.AppName, p.Values); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, secretsNativeIDChild)), nil
+	// Values are write-only, so the stored properties carry only the app name —
+	// the same shape Read reports.
+	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, secretsNativeIDChild),
+		SecretsProperties{AppName: p.AppName}), nil
 }
 
 func (s *Secrets) Read(ctx context.Context, req *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -160,7 +163,7 @@ func (s *Secrets) Update(ctx context.Context, req *resource.UpdateRequest) (*res
 	// only reaches it on restart. The plugin does not restart machines, because
 	// a service interruption should not be an invisible side effect of a secret
 	// update.
-	return prov.SuccessUpdate(req.NativeID), nil
+	return prov.SuccessUpdate(req.NativeID, SecretsProperties{AppName: app}), nil
 }
 
 func (s *Secrets) Delete(ctx context.Context, req *resource.DeleteRequest) (*resource.DeleteResult, error) {

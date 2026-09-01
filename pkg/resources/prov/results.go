@@ -35,12 +35,23 @@ func fail(op resource.Operation, code resource.OperationErrorCode, msg string) *
 	}
 }
 
-// SuccessCreate builds a synchronous-success CreateResult.
-func SuccessCreate(nativeID string) *resource.CreateResult {
+// SuccessCreate builds a synchronous-success CreateResult carrying the created
+// resource's properties.
+//
+// The properties are NOT optional decoration. Formae resolves a `res.<field>`
+// reference against the properties stored for the producing resource, and it
+// stores what Create returns — it does not call Read first. A Create that
+// reports only a NativeID logs "No properties to split for resource", stores
+// nothing, and every resolvable pointing at it fails with NotFound until the
+// consuming operation gives up. Found the hard way: a Postgres Attachment
+// referencing `app.res.name` retried nine times over two and a half minutes and
+// failed the apply, even though the app had been created successfully.
+func SuccessCreate(nativeID string, props any) *resource.CreateResult {
 	return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
-		Operation:       resource.OperationCreate,
-		OperationStatus: resource.OperationStatusSuccess,
-		NativeID:        nativeID,
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		NativeID:           nativeID,
+		ResourceProperties: MustMarshal(props),
 	}}
 }
 
@@ -57,12 +68,14 @@ func InProgressCreate(nativeID, msg string) *resource.CreateResult {
 	}}
 }
 
-// SuccessUpdate builds a synchronous-success UpdateResult.
-func SuccessUpdate(nativeID string) *resource.UpdateResult {
+// SuccessUpdate builds a synchronous-success UpdateResult carrying the updated
+// properties, for the same reason as SuccessCreate.
+func SuccessUpdate(nativeID string, props any) *resource.UpdateResult {
 	return &resource.UpdateResult{ProgressResult: &resource.ProgressResult{
-		Operation:       resource.OperationUpdate,
-		OperationStatus: resource.OperationStatusSuccess,
-		NativeID:        nativeID,
+		Operation:          resource.OperationUpdate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		NativeID:           nativeID,
+		ResourceProperties: MustMarshal(props),
 	}}
 }
 
@@ -86,12 +99,27 @@ func SuccessDelete(nativeID string) *resource.DeleteResult {
 	}}
 }
 
-// SuccessStatus reports a settled async operation.
+// SuccessStatus reports a settled async operation with no properties to carry.
+// Only for resources whose Create already returned them synchronously.
 func SuccessStatus(nativeID string) *resource.StatusResult {
 	return &resource.StatusResult{ProgressResult: &resource.ProgressResult{
 		Operation:       resource.OperationCheckStatus,
 		OperationStatus: resource.OperationStatusSuccess,
 		NativeID:        nativeID,
+	}}
+}
+
+// SuccessStatusWithProps reports a settled async operation and carries the
+// resource's properties. Async resources must use this: their Create returns
+// InProgress with nothing to store, so Status is the only place the properties
+// can reach formae — and until they do, every resolvable pointing at the
+// resource is unresolvable. See the note on SuccessCreate.
+func SuccessStatusWithProps(nativeID string, props any) *resource.StatusResult {
+	return &resource.StatusResult{ProgressResult: &resource.ProgressResult{
+		Operation:          resource.OperationCheckStatus,
+		OperationStatus:    resource.OperationStatusSuccess,
+		NativeID:           nativeID,
+		ResourceProperties: MustMarshal(props),
 	}}
 }
 

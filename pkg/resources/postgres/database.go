@@ -68,7 +68,7 @@ func (d *Database) Create(ctx context.Context, req *resource.CreateRequest) (*re
 	}, nil); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, p.Name)), nil
+	return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, p.Name), p), nil
 }
 
 // Read scans the cluster's database list: there is no per-database GET.

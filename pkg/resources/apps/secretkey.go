@@ -131,7 +131,10 @@ func (s *SecretKey) Create(ctx context.Context, req *resource.CreateRequest) (*r
 	if err := s.write(ctx, p); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, p.Name)), nil
+	// Key material is write-only, so it is dropped from the stored properties.
+	stored := p
+	stored.Value = ""
+	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, p.Name), stored), nil
 }
 
 func (s *SecretKey) Read(ctx context.Context, req *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -170,7 +173,9 @@ func (s *SecretKey) Update(ctx context.Context, req *resource.UpdateRequest) (*r
 	if err := s.write(ctx, desired); err != nil {
 		return prov.FailUpdate(flytransport.ClassifyError(err), err.Error()), nil
 	}
-	return prov.SuccessUpdate(req.NativeID), nil
+	stored := desired
+	stored.Value = ""
+	return prov.SuccessUpdate(req.NativeID, stored), nil
 }
 
 func (s *SecretKey) Delete(ctx context.Context, req *resource.DeleteRequest) (*resource.DeleteResult, error) {

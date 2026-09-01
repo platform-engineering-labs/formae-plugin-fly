@@ -125,7 +125,8 @@ func (b *Backup) Create(ctx context.Context, req *resource.CreateRequest) (*reso
 	}
 	for _, bk := range after {
 		if _, known := seen[bk.ID]; !known && bk.ID != "" {
-			return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, bk.ID)), nil
+			return prov.SuccessCreate(prov.JoinTwoPart(p.ClusterID, bk.ID),
+				bk.toProps(p.ClusterID)), nil
 		}
 	}
 	return prov.FailCreate(resource.OperationErrorCodeServiceInternalError,

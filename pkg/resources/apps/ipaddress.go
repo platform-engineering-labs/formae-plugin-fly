@@ -123,7 +123,8 @@ func (i *IPAddress) Create(ctx context.Context, req *resource.CreateRequest) (*r
 		return prov.FailCreate(resource.OperationErrorCodeServiceInternalError,
 			"allocation response carried no address"), nil
 	}
-	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, apiResp.IP)), nil
+	return prov.SuccessCreate(prov.JoinTwoPart(p.AppName, apiResp.IP),
+		apiResp.toProps(p.AppName, p.AddressType)), nil
 }
 
 // Read scans the app's assignments for the address: there is no per-address GET.

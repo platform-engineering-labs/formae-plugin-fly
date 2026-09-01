@@ -11,7 +11,8 @@ First release. Requires formae 0.84.0 or newer.
 
 ### Added
 
-Six resource types, all on the Fly.io Machines REST API (`api.machines.dev`):
+Fourteen resource types, all on the Fly.io Machines REST API
+(`api.machines.dev`) — the declarative REST surface in full:
 
 | Resource | Operations |
 |----------|-----------|
@@ -21,6 +22,18 @@ Six resource types, all on the Fly.io Machines REST API (`api.machines.dev`):
 | `FLY::Apps::Secrets` | Create, Read, Update, Delete, List |
 | `FLY::Apps::Certificate` | Create, Read, Delete, List |
 | `FLY::Apps::IPAddress` | Create, Read, Delete, List |
+| `FLY::Apps::VolumeSnapshot` | Create, Read, Delete\*, List |
+| `FLY::Apps::SecretKey` | Create, Read, Update, Delete, List |
+| `FLY::Postgres::Cluster` | Create, Read, Delete, Status, List |
+| `FLY::Postgres::Database` | Create, Read, Delete, List |
+| `FLY::Postgres::User` | Create, Read, Update, Delete, List |
+| `FLY::Postgres::Attachment` | Create, Read, Delete, List |
+| `FLY::Postgres::Extension` | Create, Read, Delete, List |
+| `FLY::Postgres::Backup` | Create, Read, Delete\*, List |
+
+\* Fly exposes no delete endpoint for volume snapshots or Postgres backups.
+Delete reports success and says so; the artifact expires under its retention
+policy.
 
 App, Certificate and IPAddress expose no Update: the API has no update endpoint
 for any of them, so every field is `createOnly` and a change is a replacement.
@@ -30,7 +43,9 @@ for any of them, so every field is `createOnly` and a change is a replacement.
 - Discovery for all six types. Machine and Volume use the org-wide endpoints
   (one cursor-paged call); Secrets, Certificate and IPAddress fan out per app
   because no org-wide endpoint exists.
-- Conformance coverage for App, Secrets and Machine.
+- Conformance coverage for App, Secrets, Machine and the whole Managed
+  Postgres graph (cluster, database, user, extension, attachment) in one forma,
+  so a single billable cluster serves every child.
 - `examples/basic/` — one publicly reachable Fly app.
 - `examples/fullstack-fly-supabase-vercel/` — a three-tier application across
   Fly, Supabase and Vercel wired with cross-plugin resolvables, plus a
