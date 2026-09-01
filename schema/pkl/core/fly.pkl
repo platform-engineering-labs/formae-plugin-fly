@@ -26,7 +26,8 @@ import "@formae/formae.pkl"
 open class Config {
     hidden fixed type: String = "FLY"
 
-    /// Fly organization slug, or "personal". Required: listing apps
+    /// Fly organization slug — the real one, not the "personal" alias
+    /// (see FLY::Apps::App.org). Required: listing apps
     /// (GET /v1/apps?org_slug=) and org-wide machine/volume discovery
     /// (GET /v1/orgs/{slug}/machines) both need it, and it cannot be derived
     /// from a token.
@@ -91,7 +92,12 @@ class App extends formae.Resource {
     }
     name: String
 
-    /// Organization slug that owns the app, or "personal".
+    /// The organization's real slug — NOT the "personal" alias.
+    ///
+    /// Fly accepts `personal` on create and reports the real slug on read.
+    /// Since this field is createOnly, that mismatch is drift on an immutable
+    /// field and formae would replace the app on every reconcile. The plugin
+    /// refuses "personal" at create and names the slug to use instead.
     ///
     /// Required on the resource even though the target also carries an `org`:
     /// the target's value scopes discovery and listing, this one decides where

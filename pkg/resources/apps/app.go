@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/prov"
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/registry"
@@ -19,6 +20,10 @@ import (
 
 // ResourceTypeApp is the FLY::Apps::App resource type.
 const ResourceTypeApp = "FLY::Apps::App"
+
+// orgAliasPersonal is the write-only alias for a user's personal organization.
+// Fly accepts it on create and reports the real slug on read.
+const orgAliasPersonal = "personal"
 
 func init() {
 	registry.Register(
@@ -100,6 +105,22 @@ func (a *App) Create(ctx context.Context, req *resource.CreateRequest) (*resourc
 		return prov.FailCreate(resource.OperationErrorCodeInvalidRequest,
 			"name and org are required"), nil
 	}
+	// "personal" is an alias Fly accepts on the way in and never gives back:
+	// POST /v1/apps?org_slug=personal succeeds, but GET /v1/apps/{name} reports
+	// the organization's real slug. `org` is createOnly, so formae would compare
+	// the desired "personal" against the actual slug, see drift on an immutable
+	// field, and plan a replacement on every single reconcile — forever.
+	//
+	// Refuse it up front with the real slug in the message, rather than letting
+	// the first apply succeed and every apply after it churn.
+	if strings.EqualFold(p.Org, orgAliasPersonal) {
+		hint := a.resolveOrgSlug(ctx)
+		msg := `org = "personal" is an alias Fly does not echo back, which would make every reconcile replace the app; use the organization's real slug`
+		if hint != "" {
+			msg += ` (yours is "` + hint + `")`
+		}
+		return prov.FailCreate(resource.OperationErrorCodeInvalidRequest, msg), nil
+	}
 	// CreateAppRequest's field is "name", not "app_name" — the older GraphQL
 	// mutation and some community providers use app_name and it is silently
 	// ignored here.
@@ -110,16 +131,41 @@ func (a *App) Create(ctx context.Context, req *resource.CreateRequest) (*resourc
 	if p.EnableSubdomains != nil {
 		body["enable_subdomains"] = *p.EnableSubdomains
 	}
-	// The 201 body is CreateAppResponse{token} — it does not echo the app. The
-	// native id is therefore the name we sent, which is safe because app names
-	// are caller-chosen and globally unique: a collision fails with 422 rather
-	// than binding to someone else's app.
+	// The 201 body does not echo the app's name or org, so the native id is the
+	// name we sent. That is safe because app names are caller-chosen and
+	// globally unique: a collision fails with 422 rather than binding to
+	// someone else's app.
+	//
+	// Note the OpenAPI spec is wrong here. It declares CreateAppResponse{token};
+	// the live API returns {"id": "...", "created_at": ...}. Observed against
+	// api.machines.dev, 2026-09-01. Nothing here reads the body, so the
+	// discrepancy is harmless — but do not trust the spec on this endpoint.
 	if err := a.Client.Do(ctx, flytransport.Request{
 		Method: "POST", Path: "/v1/apps", Body: body,
 	}, nil); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
 	}
 	return prov.SuccessCreate(p.Name), nil
+}
+
+// resolveOrgSlug best-effort looks up the token's own organization slug, so the
+// "personal" rejection can name the value the user should have written. Returns
+// "" if the lookup fails — a better error message is not worth failing over.
+func (a *App) resolveOrgSlug(ctx context.Context) string {
+	var resp struct {
+		Tokens []struct {
+			OrgSlug string `json:"org_slug"`
+		} `json:"tokens"`
+	}
+	if err := a.Client.Do(ctx, flytransport.Request{
+		Method: "GET", Path: "/v1/tokens/current",
+	}, &resp); err != nil {
+		return ""
+	}
+	if len(resp.Tokens) == 0 {
+		return ""
+	}
+	return resp.Tokens[0].OrgSlug
 }
 
 func (a *App) Read(ctx context.Context, req *resource.ReadRequest) (*resource.ReadResult, error) {

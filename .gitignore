@@ -30,6 +30,12 @@ dist/
 PklProject.deps.json
 schema/pkl/VERSION
 
+# Credentials — never commit. The plugin reads FLY_ACCESS_TOKEN / FLY_API_TOKEN
+# from the environment, so a local .env is the normal way to hold them.
+.env
+.env.*
+!.env.example
+
 # Claude Code
 CLAUDE.md
 .claude/

@@ -57,6 +57,14 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   added or removed name. The plugin never asks Fly to reveal values. Per-entry
   opacity is available via `formae.value(x).opaque`; a field-level `opaque` hint
   is not expressible for a map-valued field on formae 0.89.0.
+- **`org = "personal"` is refused.** Fly accepts the alias on create and reports
+  the organization's real slug on read; since `App.org` is `createOnly`, that
+  would be drift on an immutable field and a replacement on every reconcile.
+  Use the real slug. Found by a live write test against the API, not by reading
+  the docs.
+- **The OpenAPI spec misdescribes `POST /v1/apps`.** It declares
+  `CreateAppResponse{token}`; the API returns `{id, created_at}`. The plugin does
+  not read that body, so nothing breaks, but do not trust the spec there.
 - **`private_v6` is not a supported `addressType`.** The assignment listing never
   reports the requested type, so `Read` infers it from the address family, and a
   private 6PN address is indistinguishable from a public IPv6 one — it would

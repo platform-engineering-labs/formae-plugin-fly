@@ -8,6 +8,7 @@ package apps
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/registry"
@@ -22,9 +23,11 @@ func newApp(t *testing.T, routes map[string]route) (*App, *stub) {
 
 func TestAppCreateIsSyncAndUsesRequestedNameAsNativeID(t *testing.T) {
 	a, s := newApp(t, map[string]route{
-		// POST /v1/apps answers CreateAppResponse{token} — it does NOT echo
-		// the app, so the native id has to be the name we sent.
-		"POST /v1/apps": {201, `{"token":"fm2_deploy_token"}`},
+		// Observed live response. The OpenAPI spec claims
+		// CreateAppResponse{token}; the API actually returns {id, created_at}
+		// and echoes neither name nor org, so the native id has to be the name
+		// we sent.
+		"POST /v1/apps": {201, `{"id":"pxovqy22k4ey1j2k","created_at":1788245238000}`},
 	})
 	res, err := a.Create(context.Background(), &resource.CreateRequest{
 		ResourceType: ResourceTypeApp,
@@ -240,5 +243,61 @@ func TestAppStatusIsSuccess(t *testing.T) {
 	}
 	if res.ProgressResult.OperationStatus != resource.OperationStatusSuccess {
 		t.Errorf("status = %v", res.ProgressResult.OperationStatus)
+	}
+}
+
+// Fly accepts org_slug=personal on create and then reports the organization's
+// real slug on read. `org` is createOnly, so letting this through means formae
+// diffs "personal" against the real slug and plans a replacement on every
+// reconcile, forever. Verified against the live API 2026-09-01: creating with
+// org_slug=personal read back as organization.slug="nico-axtmann".
+func TestAppCreateRejectsPersonalOrgAlias(t *testing.T) {
+	a, s := newApp(t, map[string]route{
+		"GET /v1/tokens/current": {200, `{"tokens":[{"org_slug":"real-slug","organization":"Real Name"}]}`},
+	})
+	res, err := a.Create(context.Background(), &resource.CreateRequest{
+		ResourceType: ResourceTypeApp,
+		Properties:   mustJSON(t, map[string]any{"name": "x", "org": "personal"}),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if res.ProgressResult.OperationStatus != resource.OperationStatusFailure {
+		t.Fatal("org=personal must be refused; it would replace-loop forever")
+	}
+	if res.ProgressResult.ErrorCode != resource.OperationErrorCodeInvalidRequest {
+		t.Errorf("ErrorCode = %q", res.ProgressResult.ErrorCode)
+	}
+	// The message must name the slug the user should have written, or it just
+	// tells them they are wrong without saying what is right.
+	if !strings.Contains(res.ProgressResult.StatusMessage, "real-slug") {
+		t.Errorf("message should name the real slug, got: %s", res.ProgressResult.StatusMessage)
+	}
+	// Case-insensitive, and it must not reach POST /v1/apps.
+	for _, c := range s.calls {
+		if c.Method == "POST" {
+			t.Errorf("create reached the API: %+v", c)
+		}
+	}
+}
+
+func TestAppCreateRejectsPersonalAliasCaseInsensitively(t *testing.T) {
+	for _, alias := range []string{"Personal", "PERSONAL"} {
+		// The slug lookup is best-effort: when it fails, the rejection still has
+		// to happen, just with a less helpful message.
+		a, s := newApp(t, map[string]route{
+			"GET /v1/tokens/current": {500, `{"error":"boom"}`},
+		})
+		res, _ := a.Create(context.Background(), &resource.CreateRequest{
+			Properties: mustJSON(t, map[string]any{"name": "x", "org": alias}),
+		})
+		if res.ProgressResult.OperationStatus != resource.OperationStatusFailure {
+			t.Errorf("org=%q should be refused", alias)
+		}
+		for _, c := range s.calls {
+			if c.Method == "POST" {
+				t.Errorf("org=%q reached the API", alias)
+			}
+		}
 	}
 }

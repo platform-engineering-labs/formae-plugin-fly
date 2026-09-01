@@ -28,7 +28,7 @@ here:
 
 ```bash
 export FLY_API_TOKEN=$(fly auth token)   # personal access token
-export FLY_ORG=my-org                    # organization slug, or "personal"
+export FLY_ORG=my-org                    # organization slug — the real one, NOT "personal"
 ```
 
 `~/.fly/config.yml` is deliberately *not* read — the plugin runs inside the formae agent,
@@ -51,7 +51,7 @@ often in a container with no `$HOME/.fly`.
 new formae.Target {
   label = "fly-target"
   config = new fly.Config {
-    org    = "my-org"   // required — organization slug, or "personal"
+    org    = "my-org"   // required — the organization's real slug
     region = "fra"      // optional — default region for machines and volumes
     baseUrl = null      // optional — defaults to https://api.machines.dev
   }
@@ -60,6 +60,18 @@ new formae.Target {
 
 `org` is required: listing apps (`GET /v1/apps?org_slug=`) and org-wide machine and
 volume discovery both need it, and it cannot be derived from a token.
+
+**Use the real slug, not `"personal"`.** Fly accepts `personal` as a write-only alias and
+then reports the organization's real slug on read. Because `App.org` is `createOnly`,
+formae would compare the desired `personal` against the actual slug, see drift on an
+immutable field, and plan a replacement on every reconcile — forever. The plugin refuses
+`org = "personal"` at create and tells you the slug to use instead. Find it with
+`fly orgs list`, or:
+
+```bash
+curl -s -H "Authorization: Bearer $FLY_API_TOKEN" \
+  https://api.machines.dev/v1/tokens/current | jq -r '.tokens[0].org_slug'
+```
 
 `region` is a default so a forma need not repeat it on every machine and volume; a
 resource-level `region` wins. Region codes are the three-letter Fly codes; the
