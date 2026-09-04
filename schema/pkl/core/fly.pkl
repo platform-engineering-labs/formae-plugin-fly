@@ -446,10 +446,17 @@ open class SecretsResolvable extends formae.Resolvable {
 /// machine does not pick up a changed secret until it restarts** — the plugin
 /// does not restart machines for you, because a service interruption should
 /// not be an invisible side effect of a secret update.
+// Not extractable. `values` is write-only and the plugin never asks Fly to
+// reveal it, so an extracted Secrets bag would carry an appName and no values —
+// and Create rejects a bag with no values, so the extracted forma could not be
+// applied. Still discoverable: knowing the bag exists is useful even though its
+// contents cannot be reconstructed. Same reasoning as the AWS plugin applies to
+// resources whose create-only fields a Read can never populate.
 @formae.ResourceHint {
     type = "FLY::Apps::Secrets"
     identifier = "$.appName"
     discoverable = true
+    extractable = false
 }
 class Secrets extends formae.Resource {
     fixed hidden type: String = "FLY::Apps::Secrets"
@@ -681,10 +688,14 @@ class IPAddress extends formae.Resource {
 /// to the existing one. Volumes already snapshot themselves on a schedule when
 /// `autoBackupEnabled` is set — use this resource for an explicit snapshot at
 /// apply time (before a migration, say), not as a backup schedule.
+// Not extractable. The snapshot id is server-assigned and a forma cannot name
+// one, so applying an extracted snapshot takes a NEW snapshot rather than
+// adopting the existing one — the extract does not round-trip.
 @formae.ResourceHint {
     type = "FLY::Apps::VolumeSnapshot"
     identifier = "$.id"
     discoverable = true
+    extractable = false
 }
 class VolumeSnapshot extends formae.Resource {
     fixed hidden type: String = "FLY::Apps::VolumeSnapshot"
@@ -1069,10 +1080,14 @@ class Extension extends formae.Resource {
 ///
 /// It is modelled because some pipelines want "take a backup at apply time".
 /// For scheduled backups, use the cluster's retention policy instead.
+// Not extractable, for the same reason as VolumeSnapshot: the backup id is
+// server-assigned, so applying an extracted backup takes a new one instead of
+// adopting the existing one.
 @formae.ResourceHint {
     type = "FLY::Postgres::Backup"
     identifier = "$.id"
     discoverable = true
+    extractable = false
 }
 class Backup extends formae.Resource {
     fixed hidden type: String = "FLY::Postgres::Backup"

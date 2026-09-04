@@ -10,9 +10,16 @@ amends "pkl:Project"
 // publish fails. `make build` / `make verify-schema` write VERSION locally.
 package {
   name = "fly"
-  baseUri = "package://hub.platform.engineering/plugins/fly/schema/pkl/fly"
+  // The path segment is doubled — plugins/fly/schema/pkl/fly/fly — matching the
+  // published aws, gcp and ovh plugins. It is not decoration: `formae extract`
+  // resolves the schema package from exactly this URL, and with a single `fly`
+  // the extract step fails with
+  //   404 GET https://hub.platform.engineering/plugins/fly/schema/pkl/fly/fly@0.1.0
+  // The scaffold ships `package://localhost/...` as a placeholder; supabase and
+  // vercel still carry the single-segment form and would hit the same 404.
+  baseUri = "package://hub.platform.engineering/plugins/fly/schema/pkl/\(name)/\(name)"
   version = read("VERSION").text.trim()
-  packageZipUrl = "https://hub.platform.engineering/plugins/fly/schema/pkl/fly/fly@\(version).zip"
+  packageZipUrl = "https://hub.platform.engineering/plugins/fly/schema/pkl/\(name)/\(name)@\(version).zip"
 }
 
 dependencies {
