@@ -3,7 +3,7 @@ module github.com/platform-engineering-labs/formae-plugin-fly
 go 1.26.0
 
 require (
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.26
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.27
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.4.1
 	github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests v0.2.6
 )
