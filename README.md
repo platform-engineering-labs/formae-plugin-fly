@@ -1,287 +1,166 @@
-# formae-plugin-fly
+# Fly.io Plugin for Formae
 
-A [Formae](https://github.com/platform-engineering-labs/formae) plugin for
-[Fly.io](https://fly.io). Manage apps, machines, volumes, secrets, certificates and IP
-addresses as declarative infrastructure.
+[![CI](https://github.com/platform-engineering-labs/formae-plugin-fly/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/platform-engineering-labs/formae-plugin-fly/actions/workflows/ci.yml)
 
-Namespace `FLY`. Requires formae **0.84.0** or newer.
+Fly.io resource plugin for
+[formae](https://github.com/platform-engineering-labs/formae). This plugin
+enables Formae to manage Fly.io resources using the [Machines REST
+API](https://docs.machines.dev/) — apps, machines, volumes, secrets,
+certificates, IP addresses and Managed Postgres.
 
-That floor is the SDK's own, and it is real rather than asserted: the schema uses only
-`FieldHint` features present in the 0.84.0 Pkl package (`createOnly`, `writeOnly`,
-`requiredOnCreate`, `hasProviderDefault`, `updateMethod = "EntitySet"` with `indexField`,
-`formae.Value`, `formae.Resolvable`), and `schema/pkl/PklProject` pins that version so
-`make verify-schema` proves it on every run. A plugin declaring a higher
-`minFormaeVersion` than the agent is silently *skipped* at load — worth knowing, because
-several sibling plugins currently pin 0.89.0 and therefore do not load against the
-latest published agent (0.88.1).
+Requires formae **0.84.0** or newer.
 
----
+## Supported Resources
 
-## Credentials
+This plugin supports **14 Fly.io resource types** across 2 services. See
+[`schema/pkl/`](schema/pkl/) for field definitions and
+[`docs/RESOURCES.md`](docs/RESOURCES.md) for the full API catalog, including
+what is not yet implemented and why.
 
-The plugin reads the API token from the environment, never from a forma or from target
-config. Resolution order matches `flyctl` exactly, so a token that works with `fly` works
-here:
+| Resource Type | Description |
+|---------------|-------------|
+| `FLY::Apps::App` | Fly app — the namespace every other resource lives in. Free until a machine runs |
+| `FLY::Apps::Machine` | One Firecracker VM running one container image. **Bills per second while running** |
+| `FLY::Apps::Volume` | Persistent volume attached to at most one machine |
+| `FLY::Apps::VolumeSnapshot` | Point-in-time snapshot of a volume |
+| `FLY::Apps::Secrets` | All of an app's secrets as one resource, injected into machines at boot |
+| `FLY::Apps::SecretKey` | App-scoped KMS key material for the encrypt / sign endpoints |
+| `FLY::Apps::Certificate` | ACME certificate for a custom hostname |
+| `FLY::Apps::IPAddress` | IP address assigned to an app. Required for the app to be reachable |
+| `FLY::Postgres::Cluster` | Managed Postgres cluster. **A real always-on database, no free tier** |
+| `FLY::Postgres::Database` | Database inside a Managed Postgres cluster |
+| `FLY::Postgres::User` | Role inside a cluster. `role` is the only mutable field |
+| `FLY::Postgres::Attachment` | Attaches a Fly app to a cluster, injecting a `DATABASE_URL` secret |
+| `FLY::Postgres::Extension` | Postgres extension enabled in one database |
+| `FLY::Postgres::Backup` | Backup of a Managed Postgres cluster |
 
-1. `FLY_ACCESS_TOKEN`
-2. `FLY_API_TOKEN`
+Everything is the Machines REST API on one transport — no GraphQL client. That
+is the declarative REST surface exhausted; what remains (organizations,
+WireGuard peers, egress IPs, Upstash Redis, Tigris buckets, tokens) is
+GraphQL-only.
 
-```bash
-export FLY_API_TOKEN=$(fly auth token)   # personal access token
-export FLY_ORG=my-org                    # organization slug — the real one, NOT "personal"
-```
+### Notes
 
-`~/.fly/config.yml` is deliberately *not* read — the plugin runs inside the formae agent,
-often in a container with no `$HOME/.fly`.
+Behaviour that will surprise you otherwise:
 
-### Which token types work
+- **Use the organization's real slug, not `"personal"`.** Fly accepts `personal`
+  on create and reports the real slug on read; since `org` is `createOnly` that
+  is permanent drift. The plugin refuses it and names the slug to use.
+- **An app is unreachable from the internet until it has an `IPAddress`.**
+  `fly deploy` allocates one implicitly; the raw Machines API does not.
+  `shared_v4` and `v6` are free, a dedicated `v4` is billable.
+- **A running machine does not pick up a changed secret until it restarts.** The
+  plugin does not restart machines for you — a service interruption should not
+  be an invisible side effect of a secret update.
+- **`Machine.state` is an output, not desired state.** Setting it does nothing:
+  fly-proxy stops and starts machines itself under `autostop`/`autostart`, so
+  reconciling it would fight the platform.
+- **`region` is `createOnly` on machines and volumes.** Fly has no move
+  operation, so a region change replaces the resource — and for a volume that
+  means the data is gone.
+- **`VolumeSnapshot` and `Postgres::Backup` cannot be deleted.** Fly exposes no
+  delete endpoint; both expire under a retention policy. Their delete reports
+  success and says so.
+- **`Secrets.values` is write-only.** Value drift cannot be detected, only an
+  added or removed name. Wrap sensitive entries in `formae.value(x).opaque` to
+  have them hashed at rest.
 
-| Token | Create `fly tokens …` | Works? |
-|-------|----------------------|--------|
-| Personal access token | `fly auth token` | Yes — full surface. Best for local development. |
-| Org token | `fly tokens create org` | Yes, for everything in that org, including app create. Best for CI. |
-| Org read-only | `fly tokens create readonly` | Read, List and discovery only. Every write fails 403 → `AccessDenied`. |
-| App deploy token | `fly tokens deploy` | **No.** Scoped to one existing app; cannot create apps. |
+## Configuration
 
----
+### Target Configuration
 
-## Target configuration
+Configure a Fly.io target in your Forma file:
 
 ```pkl
-new formae.Target {
+import "@formae/formae.pkl"
+import "@fly/core/fly.pkl"
+
+target: formae.Target = new formae.Target {
   label = "fly-target"
   config = new fly.Config {
-    org    = "my-org"   // required — the organization's real slug
+    org = "my-org"      // required — the organization's real slug
     region = "fra"      // optional — default region for machines and volumes
-    baseUrl = null      // optional — defaults to https://api.machines.dev
+    // Optional: override the API endpoint
+    // baseUrl = "http://_api.internal:4280"
   }
 }
 ```
 
-`org` is required: listing apps (`GET /v1/apps?org_slug=`) and org-wide machine and
-volume discovery both need it, and it cannot be derived from a token.
+`org` is required: listing apps (`GET /v1/apps?org_slug=`) and org-wide machine
+and volume discovery both need it, and it cannot be derived from a token.
 
-**Use the real slug, not `"personal"`.** Fly accepts `personal` as a write-only alias and
-then reports the organization's real slug on read. Because `App.org` is `createOnly`,
-formae would compare the desired `personal` against the actual slug, see drift on an
-immutable field, and plan a replacement on every reconcile — forever. The plugin refuses
-`org = "personal"` at create and tells you the slug to use instead. Find it with
-`fly orgs list`, or:
-
-```bash
-curl -s -H "Authorization: Bearer $FLY_API_TOKEN" \
-  https://api.machines.dev/v1/tokens/current | jq -r '.tokens[0].org_slug'
-```
-
-`region` is a default so a forma need not repeat it on every machine and volume; a
-resource-level `region` wins. Region codes are the three-letter Fly codes; the
-authoritative list is public and needs no auth:
+`region` is a default so a forma need not repeat it on every machine and volume;
+a resource-level `region` wins. The authoritative region list is public and
+needs no auth:
 
 ```bash
 curl -s https://api.machines.dev/v1/platform/regions | jq -r '.Regions[].code'
 ```
 
-`FLY_REGION` is *not* used as a fallback. Inside a Fly VM it means "the region I am
-running in", which is a different thing from "the region to create in" — inheriting it
-would make applies behave differently depending on where the agent runs.
+`FLY_REGION` is deliberately not used as a fallback — inside a Fly VM it means
+"the region I am running in", which would make applies behave differently
+depending on where the agent runs.
 
----
+### Credentials
 
-## Supported resources
-
-### Apps
-
-| Resource type | CRUD | Notes |
-|---------------|------|-------|
-| `FLY::Apps::App` | C R D L | Free. Every field is `createOnly`: the API has no app-update endpoint. |
-| `FLY::Apps::Machine` | C R U D L | **Bills per second while running.** Create and update are async. |
-| `FLY::Apps::Volume` | C R U D L | Update covers backup settings and growth. Cannot shrink. |
-| `FLY::Apps::Secrets` | C R U D L | One resource per app, holding the whole bag. Values are write-only. |
-| `FLY::Apps::Certificate` | C R D L | ACME for a custom hostname. Create does not wait for DNS validation. |
-| `FLY::Apps::IPAddress` | C R D L | Required for the app to be reachable at all. `shared_v4` and `v6` are free. |
-| `FLY::Apps::VolumeSnapshot` | C R D\* L | Explicit snapshot at apply time. **Cannot be deleted** — see below. |
-| `FLY::Apps::SecretKey` | C R U D L | App-scoped KMS key material. Not env-var secrets — that is `Secrets`. |
-
-### Managed Postgres
-
-| Resource type | CRUD | Notes |
-|---------------|------|-------|
-| `FLY::Postgres::Cluster` | C R D L | **A real always-on database, no free tier.** Create is async and slow. |
-| `FLY::Postgres::Database` | C R D L | |
-| `FLY::Postgres::User` | C R U D L | `role` is the only mutable field in the whole Postgres surface. |
-| `FLY::Postgres::Attachment` | C R D L | Attaching injects a `DATABASE_URL` secret into the app — don't also declare it. |
-| `FLY::Postgres::Extension` | C R D L | "Exists" means installed; the API lists the whole catalogue. |
-| `FLY::Postgres::Backup` | C R D\* L | Backup at apply time. **Cannot be deleted** — see below. |
-
-**\* Two resources cannot be deleted.** Fly exposes no delete endpoint for
-`VolumeSnapshot` or `Postgres::Backup`; both expire under a retention policy. Their
-delete reports success and says so in the status message — failing would wedge every
-`formae destroy` containing one. Both are server-id-assigned, so re-applying after a
-destroy takes a *new* artifact rather than reconciling to the existing one.
-
-Everything above is the Machines REST API (`api.machines.dev`) — one transport, no
-GraphQL. That is the declarative REST surface exhausted; what remains unimplemented
-(organizations, WireGuard peers, egress IPs, Upstash Redis, Tigris buckets, tokens) is
-GraphQL-only. See [docs/RESOURCES.md](docs/RESOURCES.md) for the full API catalog, what is
-coming next (Managed Postgres is the big one, 22 REST operations), and what is
-GraphQL-only. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) records the decisions.
-
-### Things worth knowing before you apply
-
-- **An app with machines and services is still unreachable** until it has an
-  `IPAddress`. `fly deploy` allocates one implicitly; the raw Machines API does not.
-- **A running machine does not pick up a changed secret** until it restarts. The plugin
-  does not restart machines for you — a service interruption should not be an invisible
-  side effect of a secret update. Use `fly machine restart`, or change something in the
-  machine's config to force a new version.
-- **`Machine.state` is an output, not desired state.** Setting it does nothing. fly-proxy
-  stops and starts machines itself when `autostop`/`autostart` are set, so reconciling
-  `state` would fight the platform in a loop that also bills for every wake-up. Use
-  `fly machine start|stop` for runtime control.
-- **`region` is `createOnly` on machines and volumes.** Fly has no move operation for
-  either, so a region change is a replacement — and for a volume that means the data is
-  gone.
-- **A certificate can sit at `pending_validation` forever.** Create succeeds as soon as
-  Fly accepts the request; publish the records in the resource's `dnsRequirements` output
-  and then `fly certs check <hostname>`.
-
----
-
-## Example
-
-```pkl
-amends "@formae/forma.pkl"
-
-import "@formae/formae.pkl"
-import "@fly/core/fly.pkl"
-
-local flyOrg = read("env:FLY_ORG")
-
-forma {
-  new formae.Stack { label = "fly-demo" }
-
-  new formae.Target {
-    label = "fly-target"
-    config = new fly.Config {
-      org = flyOrg
-      region = "fra"
-    }
-  }
-
-  local app = new fly.App {
-    label = "demo-app"
-    name = "my-globally-unique-app-name"
-    org = flyOrg
-  }
-  app
-
-  new fly.Secrets {
-    label = "demo-secrets"
-    appName = app.res.name
-    values {
-      // Per-entry opacity: hashed at rest, never printed.
-      ["DATABASE_URL"] = formae.value(read("env:DATABASE_URL")).opaque
-    }
-  }
-
-  new fly.Machine {
-    label = "demo-machine"
-    appName = app.res.name
-    name = "web"
-    image = "flyio/hellofly:latest"
-    guest = new fly.MachineGuest { cpuKind = "shared"; cpus = 1; memoryMb = 256 }
-    services {
-      new fly.MachineService {
-        internalPort = 8080
-        autostart = true
-        autostop = "stop"
-        ports {
-          new fly.MachinePort { port = 443; handlers { "tls"; "http" } }
-        }
-      }
-    }
-  }
-
-  new fly.IPAddress {
-    label = "demo-ipv4"
-    appName = app.res.name
-    addressType = "shared_v4"
-  }
-}
-```
+The plugin reads the API token from the environment, never from a forma or from
+target config. Resolution order matches `flyctl` exactly, so a token that works
+with `fly` works here:
 
 ```bash
-formae apply --mode reconcile --yes main.pkl
-formae destroy main.pkl
+export FLY_ACCESS_TOKEN="your-token"   # checked first
+export FLY_API_TOKEN="your-token"      # fallback
+export FLY_ORG="my-org"                # organization slug
 ```
 
-Runnable versions:
+`~/.fly/config.yml` is deliberately not read — the plugin runs inside the formae
+agent, often in a container with no `$HOME/.fly`.
 
-- [`examples/basic/`](examples/basic/) — one reachable Fly app: app, secret, machine, IPs.
-- [`examples/fullstack-fly-supabase-vercel/`](examples/fullstack-fly-supabase-vercel/) —
-  a full-stack app across three plugins, with a two-plugin variant that applies today.
+**Which token types work:**
 
-### Secrets and opacity
+| Token | Create with | Works? |
+|-------|-------------|--------|
+| Personal access token | `fly auth token` | Yes — full surface. Short-lived; best for local development |
+| Org token | `fly tokens create org` | Yes, for everything in that org, including app create. Best for CI |
+| Org read-only | `fly tokens create readonly` | Read, List and discovery only. Writes fail 403 |
+| App deploy token | `fly tokens deploy` | **No** — scoped to one existing app, cannot create apps |
 
-`Secrets.values` is `writeOnly`, so formae never diffs the values — a changed value
-cannot be detected as drift, only an added or removed *name*. The plugin also never asks
-Fly to reveal values (the API can, via `?show_secrets=true`), so nothing pulls secret
-material back out.
-
-Mark individual entries opaque with `formae.value(x).opaque`; they are then hashed at
-rest. A field-level `opaque` hint is not available for a map-valued field on formae
-0.89.0 — see docs/ARCHITECTURE.md for why.
-
----
-
-## Development
+`GET /v1/tokens/current` reports what a token can do:
 
 ```bash
-make build          # build to bin/fly
-make lint           # golangci-lint
-make test-unit      # unit tests (//go:build unit), no credentials needed
-make verify-schema  # validate the Pkl schema
-make install        # build + install to ~/.pel/formae/plugins/fly/v<version>/
+curl -s -H "Authorization: Bearer $FLY_API_TOKEN" \
+  https://api.machines.dev/v1/tokens/current | jq
 ```
 
-Conformance tests run the **installed** binary, so `make install` is not optional —
-`make conformance-test` does it for you as a dependency:
+## Examples
+
+See the [examples/](examples/) directory for usage examples.
 
 ```bash
-export FLY_API_TOKEN=$(fly auth token)
-export FLY_ORG=my-org
-export FLY_TEST_REGION=fra        # optional, defaults to fra
+# Evaluate an example
+formae eval examples/basic/main.pkl
 
-make conformance-test TEST=app                    # free, seconds
-make conformance-test TEST=secrets                # free, seconds
-make conformance-test TEST=machine TIMEOUT=15     # BILLABLE, async, needs the timeout
-make conformance-test TEST=postgres TIMEOUT=30    # MOST EXPENSIVE: a real database
-make conformance-test TIMEOUT=30                  # everything
+# Apply resources — returns a command id; poll it to watch progress
+formae apply --mode reconcile --yes examples/basic/main.pkl
+formae command status <id> --output-layout detailed
 ```
 
-`TIMEOUT` is in **minutes**, matching the documented convention. The Makefile appends the
-`m` for `go test -timeout` and also exports it as `FORMAE_TEST_TIMEOUT`, which the harness
-reads (in minutes) for its per-command polling deadline — so `TIMEOUT=15m` would be
-rejected as `-timeout 15mm`. `VERSION=0.88.1` pins the agent version the harness downloads;
-leaving it unset takes the latest published release.
+| Example | Shows | Costs anything? |
+|---------|-------|-----------------|
+| [`basic/`](examples/basic/) | One publicly reachable Fly app: app, secret, machine, IPv4 + IPv6 | Yes — the machine bills per second |
+| [`fullstack-fly-supabase-vercel/`](examples/fullstack-fly-supabase-vercel/) | A three-tier app across Fly, Supabase and Vercel, wired with cross-plugin resolvables. Includes a two-provider variant | Yes — a Supabase project and a Fly machine |
 
-The harness rewrites `schema/pkl/PklProject` and `testdata/PklProject` to the agent's
-formae version for the duration of a run, then restores them. That is the compatibility
-check doing its job, not a stray edit.
+There is no `--watch` flag in formae 0.89.0: `formae apply` returns as soon as
+the agent accepts the command. Machine creates, and Managed Postgres creates in
+particular, are asynchronous — follow them with `formae command status`.
 
-`make clean-environment` deletes every app in `FLY_ORG` whose name starts with
-`formae-sdk-test-`. Destroying an app cascades to its machines, volumes, secrets,
-certificates and IP assignments, so that one call is enough to stop a leaked machine
-billing. It runs automatically before and after each conformance run, and needs `jq`.
-
-Adding a resource is documented at the end of
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The short version: read the operation out
-of the OpenAPI spec (`https://docs.machines.dev/spec/openapi3.json`) rather than from a
-Terraform provider, write the failing unit test first, and register only the operations
-the API actually supports.
-
----
+Contributor setup, conformance testing and publishing are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Design decisions and the API research behind
+them are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
-FSL-1.1-ALv2. See [LICENSE](LICENSE).
+This plugin is licensed under the [Functional Source License, Version 1.1, ALv2
+Future License (FSL-1.1-ALv2)](LICENSE).
+
+Copyright 2026 Platform Engineering Labs Inc.
