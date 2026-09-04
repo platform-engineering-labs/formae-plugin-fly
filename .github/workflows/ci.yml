@@ -1,5 +1,15 @@
 name: CI
 
+# scripts/ci/clean-environment.sh deletes every app and Postgres cluster
+# matching the formae-sdk-test- prefix in FLY_ORG, before AND after each test.
+# Two conformance runs in the same org therefore destroy each other's in-flight
+# resources — a push landing while an earlier run is mid-test would fail both.
+# Queue them instead of cancelling, so a run that has already created a Postgres
+# cluster is never killed before its cleanup step.
+concurrency:
+  group: fly-conformance-tests
+  cancel-in-progress: false
+
 on:
   push:
     branches: [main]
@@ -9,11 +19,6 @@ on:
     - cron: '0 3 * * *'  # Nightly at 3 AM UTC
   workflow_dispatch:
     inputs:
-      run_conformance:
-        description: 'Run conformance tests'
-        required: false
-        default: 'false'
-        type: boolean
       formae_version:
         description: 'Formae version to test against (default: latest)'
         required: false
@@ -123,15 +128,13 @@ jobs:
       - name: Run integration tests
         run: make test-integration
 
-  # Conformance tests run against real Fly.io resources.
+  # Conformance tests run against real Fly.io resources, on every push, pull
+  # request and nightly schedule — same as the aws plugin's ci.yml.
   #
-  # MANUAL DISPATCH ONLY, on purpose. The machine test creates a real Fly
-  # machine, and a machine bills by the second. Running this on the nightly
-  # `schedule` trigger would spend money every night without anyone asking, so
-  # enabling that is a deliberate decision, not a default. To do it, change the
-  # `if:` below to:
-  #
-  #   if: github.event_name == 'schedule' || github.event.inputs.run_conformance == 'true'
+  # BILLABLE. A full pass provisions and then destroys a real Managed Postgres
+  # cluster (plan "basic", the 10 GB minimum) and a real shared-cpu-1x machine,
+  # alongside free apps, secrets, volumes, IP addresses and secret keys. A full
+  # local run took about 18 minutes end to end.
   #
   # Requires two repository secrets:
   #   FLY_API_TOKEN  an org-scoped token — `fly tokens create org`. A deploy
@@ -144,9 +147,6 @@ jobs:
   conformance-tests:
     needs: [build, lint, pkl-validate, verify-schema]
     runs-on: ubuntu-latest
-    # Disabled by default - change condition after configuring credentials:
-    # if: github.event_name == 'schedule' || github.event_name == 'push' || github.event.inputs.run_conformance == 'true'
-    if: ${{ github.event.inputs.run_conformance == 'true' }}
     timeout-minutes: 60
 
     strategy:
