@@ -1,0 +1,34 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: update FLY::Apps::Volume.
+//
+// Exercises both halves of the update path in one apply: `sizeGb` grows via
+// PUT .../extend, and `autoBackupEnabled` / `snapshotRetention` go through
+// PUT on the volume itself. A shrink would be refused — Fly cannot shrink a
+// volume and the plugin says so rather than silently leaving it larger.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local app = v.app
+  app
+
+  new fly.Volume {
+    label = "plugin-sdk-test-volume"
+    appName = app.res.name
+    name = "sdk_test_vol"
+    region = v.region
+    sizeGb = 2                    // CHANGED — grows via .../extend
+    fstype = "ext4"
+    autoBackupEnabled = false     // CHANGED — goes through PUT on the volume
+    snapshotRetention = 3         // CHANGED
+  }
+}

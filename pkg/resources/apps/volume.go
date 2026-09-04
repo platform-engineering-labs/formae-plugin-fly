@@ -18,6 +18,21 @@ import (
 // ResourceTypeVolume is the FLY::Apps::Volume resource type.
 const ResourceTypeVolume = "FLY::Apps::Volume"
 
+// volumeGoneStates are the states a volume passes through on its way out.
+//
+// Deleting a volume does NOT make it 404: the API answers 200 with the volume
+// still present and its state set to "waiting_for_detach" (observed against
+// api.machines.dev, 2026-09-04). Reporting that as existing means formae's sync
+// never prunes it — the resource sticks in the inventory forever, which is
+// exactly what the out-of-band-delete conformance phase caught.
+var volumeGoneStates = map[string]struct{}{
+	"waiting_for_detach": {},
+	"pending_destroy":    {},
+	"destroying":         {},
+	"destroyed":          {},
+	"deleted":            {},
+}
+
 func init() {
 	registry.Register(
 		ResourceTypeVolume,
@@ -164,6 +179,10 @@ func (v *Volume) Read(ctx context.Context, req *resource.ReadRequest) (*resource
 			return prov.NotFoundRead(req.ResourceType), nil
 		}
 		return prov.FailRead(req.ResourceType, flytransport.ClassifyError(err)), nil
+	}
+	// A volume on its way out is gone as far as desired state is concerned.
+	if _, gone := volumeGoneStates[apiResp.State]; gone {
+		return prov.NotFoundRead(req.ResourceType), nil
 	}
 	return prov.OKRead(req.ResourceType, apiResp.toProps(app)), nil
 }

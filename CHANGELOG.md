@@ -43,9 +43,16 @@ for any of them, so every field is `createOnly` and a change is a replacement.
 - Discovery for all six types. Machine and Volume use the org-wide endpoints
   (one cursor-paged call); Secrets, Certificate and IPAddress fan out per app
   because no org-wide endpoint exists.
-- Conformance coverage for App, Secrets, Machine and the whole Managed
-  Postgres graph (cluster, database, user, extension, attachment) in one forma,
-  so a single billable cluster serves every child.
+- Conformance coverage — CRUD lifecycle and discovery — for App, Secrets,
+  Machine, Volume, IPAddress and the whole Managed Postgres graph (cluster,
+  database, user, extension, attachment) in one forma, so a single billable
+  cluster serves every child. Ten of the fourteen types are exercised against
+  the live API.
+
+  Not conformance-tested, deliberately: `Certificate` never converges without
+  DNS records on a domain the suite controls, and `VolumeSnapshot` /
+  `Postgres::Backup` have no delete endpoint, so every run would leak an
+  artifact. `SecretKey` is unit-tested only. Reasoning in docs/RESOURCES.md.
 - `examples/basic/` — one publicly reachable Fly app.
 - `examples/fullstack-fly-supabase-vercel/` — a three-tier application across
   Fly, Supabase and Vercel wired with cross-plugin resolvables, plus a
@@ -72,6 +79,13 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   added or removed name. The plugin never asks Fly to reveal values. Per-entry
   opacity is available via `formae.value(x).opaque`; a field-level `opaque` hint
   is not expressible for a map-valued field on formae 0.89.0.
+- **`org_slug` is never sent when allocating an IP address.** The API declares
+  the field but rejects it for every type except `private_v6`
+  (`400 org_slug is only supported with private_v6 type`), and `private_v6` is
+  not supported here. The spec does not mention the restriction.
+- **A deleted volume does not 404.** The API answers 200 with the volume still
+  present and `state: "waiting_for_detach"`, so Read treats that and the other
+  outgoing states as gone — otherwise formae's sync never prunes it.
 - **`org = "personal"` is refused.** Fly accepts the alias on create and reports
   the organization's real slug on read; since `App.org` is `createOnly`, that
   would be drift on an immutable field and a replacement on every reconcile.

@@ -19,7 +19,7 @@ func newIP(t *testing.T, routes map[string]route) (*IPAddress, *stub) {
 	return &IPAddress{Client: s.client(), Target: s.target()}, s
 }
 
-func TestIPAddressCreateSendsTypeAndOrg(t *testing.T) {
+func TestIPAddressCreateSendsTypeWithoutOrg(t *testing.T) {
 	i, s := newIP(t, map[string]route{
 		"POST /v1/apps/my-api/ip_assignments": {200, `{"ip":"66.241.125.1","region":"global","shared":true}`},
 	})
@@ -42,8 +42,12 @@ func TestIPAddressCreateSendsTypeAndOrg(t *testing.T) {
 	if body["type"] != "shared_v4" {
 		t.Errorf("body = %+v", body)
 	}
-	if body["org_slug"] != "test-org" {
-		t.Errorf("org_slug = %v; private 6PN addresses need it to resolve the network", body["org_slug"])
+	// org_slug must NOT be sent. The API rejects it for every type except
+	// private_v6 with 400 "org_slug is only supported with private_v6 type",
+	// and this test previously asserted the opposite — which is why a live
+	// conformance run was the thing that caught it.
+	if _, present := body["org_slug"]; present {
+		t.Errorf("org_slug must not be sent: the API 400s on it for shared_v4: %+v", body)
 	}
 }
 

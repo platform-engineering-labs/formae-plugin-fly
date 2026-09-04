@@ -1,0 +1,32 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: replace FLY::Apps::IPAddress.
+//
+// `addressType` is createOnly, so switching from a shared IPv4 to an IPv6
+// forces a release-and-allocate. Both types are free.
+//
+// This also exercises the type inference in Read: the assignment listing
+// reports only the address and a `shared` flag, never the requested type, so
+// Read derives it from the address family. shared_v4 and v6 both round-trip;
+// `private_v6` would not, which is why the schema does not offer it.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local app = v.app
+  app
+
+  new fly.IPAddress {
+    label = "plugin-sdk-test-ip"
+    appName = app.res.name
+    addressType = "v6"        // CHANGED — createOnly, forces a replace
+  }
+}

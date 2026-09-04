@@ -1,0 +1,34 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: create FLY::Apps::IPAddress (with the app it hangs off).
+//
+// Free: `shared_v4` and `v6` cost nothing. A dedicated `v4` is billable and is
+// deliberately not tested.
+//
+// This resource is load-bearing for both examples — an app with machines and
+// services is unreachable from the internet until it has an address, because
+// `fly deploy` allocates one implicitly and the raw Machines API does not.
+//
+// There is no -update variant, and that is the point: Fly picks the address, so
+// every input is createOnly and the API has no update path at all.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local app = v.app
+  app
+
+  new fly.IPAddress {
+    label = "plugin-sdk-test-ip"
+    appName = app.res.name
+    addressType = "shared_v4"
+  }
+}

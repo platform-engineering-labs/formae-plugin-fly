@@ -108,11 +108,16 @@ func (i *IPAddress) Create(ctx context.Context, req *resource.CreateRequest) (*r
 	if p.ServiceName != "" {
 		body["service_name"] = p.ServiceName
 	}
-	if i.Target != nil && i.Target.Org != "" {
-		// assignIPRequest carries org_slug; private (6PN) addresses need it to
-		// resolve the network.
-		body["org_slug"] = i.Target.Org
-	}
+	// org_slug is deliberately NOT sent. assignIPRequest declares the field, but
+	// the API rejects it for every type except private_v6:
+	//
+	//   POST .../ip_assignments {"type":"shared_v4","org_slug":"…"}
+	//   -> 400 {"error":"org_slug is only supported with private_v6 type"}
+	//
+	// Since private_v6 is not a supported addressType here (Read cannot tell it
+	// apart from a public IPv6, so it would drift forever), there is no case in
+	// which sending org_slug is correct. Observed against api.machines.dev,
+	// 2026-09-04; the spec does not mention the restriction.
 	var apiResp ipAssignmentAPI
 	if err := i.Client.Do(ctx, flytransport.Request{
 		Method: "POST", Path: "/v1/apps/" + p.AppName + "/ip_assignments", Body: body,

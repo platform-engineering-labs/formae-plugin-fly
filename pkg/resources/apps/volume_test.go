@@ -166,3 +166,40 @@ func TestVolumeListUsesOrgEndpoint(t *testing.T) {
 		t.Errorf("NextPageToken = %v, want nil for an empty cursor", *res.NextPageToken)
 	}
 }
+
+// Deleting a volume does not 404 it: the API answers 200 with the volume still
+// present and state "waiting_for_detach". Reporting that as alive means sync
+// never prunes the resource — caught by the out-of-band-delete phase of a live
+// conformance run, not by any stub.
+func TestVolumeReadTreatsOutgoingStatesAsGone(t *testing.T) {
+	for _, state := range []string{
+		"waiting_for_detach", "pending_destroy", "destroying", "destroyed", "deleted",
+	} {
+		v, _ := newVolume(t, map[string]route{
+			"GET /v1/apps/my-api/volumes/vol_1": {200,
+				`{"id":"vol_1","name":"data","state":"` + state + `","size_gb":1}`},
+		})
+		res, _ := v.Read(context.Background(), &resource.ReadRequest{
+			ResourceType: ResourceTypeVolume, NativeID: "my-api/vol_1",
+		})
+		if res.ErrorCode != resource.OperationErrorCodeNotFound {
+			t.Errorf("state %q -> ErrorCode %q, want NotFound", state, res.ErrorCode)
+		}
+	}
+}
+
+// A healthy volume must still read normally.
+func TestVolumeReadCreatedStateIsAlive(t *testing.T) {
+	v, _ := newVolume(t, map[string]route{
+		"GET /v1/apps/my-api/volumes/vol_1": {200, `{"id":"vol_1","name":"data","state":"created","size_gb":1}`},
+	})
+	res, _ := v.Read(context.Background(), &resource.ReadRequest{
+		ResourceType: ResourceTypeVolume, NativeID: "my-api/vol_1",
+	})
+	if res.ErrorCode != "" {
+		t.Fatalf("ErrorCode = %q, want a live read", res.ErrorCode)
+	}
+	if decodeProps(t, res.Properties)["state"] != "created" {
+		t.Errorf("props = %s", res.Properties)
+	}
+}

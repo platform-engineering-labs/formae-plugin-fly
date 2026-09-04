@@ -1,0 +1,39 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Conformance: replace FLY::Apps::Volume.
+//
+// `name` is createOnly, so changing it forces a destroy-and-create. Region
+// would work as the trigger too and is the more realistic cause of a
+// replacement, but it would place the new volume in a second region for no
+// extra coverage — the code path is identical.
+//
+// Note what a volume replacement means in practice: the data is gone. That is
+// the honest model, since Fly has no move operation.
+//
+// sizeGb stays at the updated value so the diff is unambiguously the name.
+
+amends "@formae/forma.pkl"
+import "@fly/core/fly.pkl"
+
+import "./config/vars.pkl" as v
+
+forma {
+  v.stack
+  v.target
+
+  local app = v.app
+  app
+
+  new fly.Volume {
+    label = "plugin-sdk-test-volume"
+    appName = app.res.name
+    name = "sdk_test_vol_replaced"   // CHANGED — createOnly, forces a replace
+    region = v.region
+    sizeGb = 2
+    fstype = "ext4"
+    autoBackupEnabled = false
+    snapshotRetention = 3
+  }
+}
