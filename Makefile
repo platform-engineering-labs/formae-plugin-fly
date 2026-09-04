@@ -37,13 +37,26 @@ CONFORMANCE_VERSION := $(if $(filter-out latest,$(VERSION)),FORMAE_VERSION=$(VER
 PLUGIN_BASE_DIR := $(HOME)/.pel/formae/plugins
 INSTALL_DIR := $(PLUGIN_BASE_DIR)/$(PLUGIN_NAME)/v$(PLUGIN_VERSION)
 
-.PHONY: all build test test-unit test-integration lint verify-schema clean install help clean-environment conformance-test conformance-test-crud conformance-test-discovery
+.PHONY: all build schema-version test test-unit test-integration lint verify-schema clean install help clean-environment conformance-test conformance-test-crud conformance-test-discovery
 
 all: build
 
-## build: Build the plugin binary and update manifest
-build:
+## schema-version: Write schema/pkl/VERSION, which the Pkl package reads.
+##
+## schema/pkl/PklProject stamps its package version with
+## `read("VERSION").text.trim()`, and that file is gitignored — the Hub build
+## pipeline writes the release version there before packaging. So ANY target
+## that evaluates the schema has to create it first, or pkl fails on a fresh
+## checkout with:
+##   Cannot find resource `VERSION`
+## That is exactly how CI broke: verify-schema ran as its own job, without a
+## prior build, on a clean clone. Phony rather than a file target so a stale
+## VERSION is always rewritten when the manifest version changes.
+schema-version:
 	@mkdir -p schema/pkl && echo "$(PLUGIN_VERSION)" > schema/pkl/VERSION
+
+## build: Build the plugin binary and update manifest
+build: schema-version
 	$(GO) build $(GOFLAGS) -o bin/$(BINARY) .
 	@SDK_MIN=$$($(GO) list -m -f '{{.Dir}}' github.com/platform-engineering-labs/formae/pkg/plugin 2>/dev/null | xargs -I{} grep 'MinFormaeVersion' {}/version.go 2>/dev/null | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"'); \
 	DECLARED=$$(pkl eval -x minFormaeVersion formae-plugin.pkl 2>/dev/null); \
@@ -78,7 +91,7 @@ lint:
 
 ## verify-schema: Validate PKL schema files
 ## Checks that schema files are well-formed and follow formae conventions.
-verify-schema:
+verify-schema: schema-version
 	$(GO) run github.com/platform-engineering-labs/formae/pkg/plugin/testutil/cmd/verify-schema --namespace $(PLUGIN_NAMESPACE) ./schema/pkl
 
 ## clean: Remove build artifacts
