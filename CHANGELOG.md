@@ -49,10 +49,13 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   cluster serves every child. Ten of the fourteen types are exercised against
   the live API.
 
+  SecretKey is covered too, so twelve of the fourteen types are exercised
+  against the live API.
+
   Not conformance-tested, deliberately: `Certificate` never converges without
   DNS records on a domain the suite controls, and `VolumeSnapshot` /
   `Postgres::Backup` have no delete endpoint, so every run would leak an
-  artifact. `SecretKey` is unit-tested only. Reasoning in docs/RESOURCES.md.
+  artifact. Reasoning in docs/RESOURCES.md.
 - `examples/basic/` — one publicly reachable Fly app.
 - `examples/fullstack-fly-supabase-vercel/` — a three-tier application across
   Fly, Supabase and Vercel wired with cross-plugin resolvables, plus a
@@ -79,6 +82,12 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   added or removed name. The plugin never asks Fly to reveal values. Per-entry
   opacity is available via `formae.value(x).opaque`; a field-level `opaque` hint
   is not expressible for a map-valued field on formae 0.89.0.
+- **`SecretKey.keyType` is required and immutable.** The OpenAPI spec marks it
+  optional; omitting it answers 400 and lists the accepted set (`hs256`,
+  `hs384`, `hs512`, `xaes256gcm`, `nacl_auth`, `nacl_box`, `nacl_secretbox`,
+  `nacl_sign`, `es256`). Changing the type of an existing key answers
+  `500 secret <name> is of type 3, expected 5`, so it is createOnly and formae
+  replaces instead of updating. Key names also reject hyphens.
 - **`org_slug` is never sent when allocating an IP address.** The API declares
   the field but rejects it for every type except `private_v6`
   (`400 org_slug is only supported with private_v6 type`), and `private_v6` is

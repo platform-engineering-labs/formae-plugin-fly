@@ -742,12 +742,28 @@ class SecretKey extends formae.Resource {
     appName: String|formae.Resolvable
 
     /// Key name. Immutable — it is the key's identity server-side.
+    ///
+    /// Hyphens are rejected: the API answers
+    /// `400 "<name>" is not a valid secret name`. Use underscores.
     @formae.FieldHint { createOnly = true; requiredOnCreate = true }
     name: String
 
-    /// Key type, e.g. "hs256", "nacl_auth". Fly picks a default when omitted.
-    @formae.FieldHint { hasProviderDefault = true }
-    keyType: String?
+    /// Key type. REQUIRED — omitting it is a 400, despite the OpenAPI spec
+    /// listing the field as optional. The API reports the accepted set in its
+    /// error message:
+    ///
+    ///   hs256, hs384, hs512, xaes256gcm, nacl_auth, nacl_box,
+    ///   nacl_secretbox, nacl_sign, es256
+    ///
+    /// Immutable. POST on the key is create-or-update, but only for the
+    /// *material*: changing the type of an existing key fails with
+    /// `500 secret <name> is of type 3, expected 5`. Re-posting the same type
+    /// rotates the material and succeeds. So a type change must replace the
+    /// resource, which is what createOnly makes formae do — and it keeps
+    /// formae from retrying that 500 as a recoverable error.
+    /// Verified against api.machines.dev, 2026-09-04.
+    @formae.FieldHint { createOnly = true; requiredOnCreate = true }
+    keyType: String
 
     /// Base64-encoded key material. Write-only — the API never returns it.
     ///
@@ -757,7 +773,9 @@ class SecretKey extends formae.Resource {
     @formae.FieldHint { writeOnly = true }
     value: (String|formae.Value)?
 
-    /// Base64 public key, for asymmetric key types. Output only.
+    /// Base64 public key, present only for asymmetric types (nacl_box, nacl_sign,
+    /// es256). Output only. The spec declares this an array of integers; the API
+    /// returns a base64 string.
     @formae.FieldHint { hasProviderDefault = true }
     publicKey: String?
 
@@ -793,7 +811,8 @@ open class ClusterResolvable extends formae.Resolvable {
 /// Create is async and slow — the status walk is
 /// `creating → initializing → ready`, and `primaryEndpoint` is only populated
 /// once the cluster is ready, so anything needing a connection host must wait.
-/// Use `--watch`.
+/// `formae apply` returns as soon as the agent accepts the command; poll with
+/// `formae command status <id> --output-layout detailed` to watch it converge.
 ///
 /// COSTS MONEY: a cluster is a real, always-on database. There is no free tier.
 @formae.ResourceHint {

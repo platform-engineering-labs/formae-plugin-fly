@@ -125,16 +125,23 @@ formae plugin list    # expect fly, supabase and vercel
 cd formae-plugin-fly
 
 # All three tiers
-formae apply --mode reconcile --watch examples/fullstack-fly-supabase-vercel/main.pkl
+formae apply --mode reconcile --yes examples/fullstack-fly-supabase-vercel/main.pkl
 
 # Fly + Supabase only
-formae apply --mode reconcile --watch examples/fullstack-fly-supabase-vercel/fly-supabase.pkl
+formae apply --mode reconcile --yes examples/fullstack-fly-supabase-vercel/fly-supabase.pkl
 ```
 
-`--watch` matters here: two resources are genuinely async. The Supabase project takes
-about 2–3 minutes to reach `ACTIVE_HEALTHY`, and the Fly machine another 5–90 seconds to
-pull its image and boot. Without `--watch` the command returns while both are still
-converging.
+Two resources here are genuinely async: the Supabase project takes about 2–3 minutes to
+reach `ACTIVE_HEALTHY`, and the Fly machine another 5–90 seconds to pull its image and
+boot. `formae apply` does not block on that — it returns as soon as the agent accepts the
+command and prints a command id. Follow it with:
+
+```bash
+formae command status <id> --output-layout detailed
+```
+
+(Older docs across these plugins show an `--apply --watch` flag. It does not exist in
+formae 0.89.0; `formae apply --help` is the authority.)
 
 Preview without touching anything:
 

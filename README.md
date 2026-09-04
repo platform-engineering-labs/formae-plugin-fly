@@ -211,7 +211,7 @@ forma {
 ```
 
 ```bash
-formae apply --mode reconcile --watch main.pkl
+formae apply --mode reconcile --yes main.pkl
 formae destroy main.pkl
 ```
 

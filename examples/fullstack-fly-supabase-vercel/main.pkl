@@ -41,10 +41,13 @@
  *   export VERCEL_TOKEN=...                       # vercel.com/account/settings/tokens
  *   export APP_SLUG=<globally-unique name>        # Fly app names are global
  *
- *   formae apply --mode reconcile --watch examples/fullstack-fly-supabase-vercel/main.pkl
+ *   formae apply --mode reconcile --yes examples/fullstack-fly-supabase-vercel/main.pkl
  *
  * Supabase project create takes ~2-3 minutes and the Fly machine another 5-90
- * seconds; --watch shows both. Tear down with:
+ * seconds. `formae apply` returns as soon as the agent accepts the command and
+ * prints a command id; poll it with
+ *   formae command status <id> --output-layout detailed
+ * Tear down with:
  *
  *   formae destroy examples/fullstack-fly-supabase-vercel/main.pkl
  *

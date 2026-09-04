@@ -124,9 +124,13 @@ func (s *SecretKey) Create(ctx context.Context, req *resource.CreateRequest) (*r
 	if err := json.Unmarshal(req.Properties, &p); err != nil {
 		return prov.FailCreate(resource.OperationErrorCodeInvalidRequest, err.Error()), nil
 	}
-	if p.AppName == "" || p.Name == "" {
+	if p.AppName == "" || p.Name == "" || p.KeyType == "" {
+		// keyType is required by the API even though the spec marks it optional:
+		// omitting it returns 400 with the accepted set in the message. Fail
+		// here rather than spending a round trip to learn that.
 		return prov.FailCreate(resource.OperationErrorCodeInvalidRequest,
-			"appName and name are required"), nil
+			"appName, name and keyType are required; keyType must be one of "+
+				"hs256, hs384, hs512, xaes256gcm, nacl_auth, nacl_box, nacl_secretbox, nacl_sign, es256"), nil
 	}
 	if err := s.write(ctx, p); err != nil {
 		return prov.FailCreate(flytransport.ClassifyError(err), err.Error()), nil
@@ -157,9 +161,13 @@ func (s *SecretKey) Read(ctx context.Context, req *resource.ReadRequest) (*resou
 	return prov.OKRead(req.ResourceType, api.toProps(app)), nil
 }
 
-// Update rewrites the key. Note this rotates the material when `value` is
-// omitted, because the generate endpoint is the only create-or-update path
-// available without supplying bytes.
+// Update rewrites the key's material. Only `value` can change: `keyType` is
+// createOnly because changing the type of an existing key fails with
+// `500 secret <name> is of type 3, expected 5`, so formae replaces the resource
+// instead of coming here.
+//
+// When `value` is omitted the rewrite goes through the generate endpoint, which
+// rotates the material. That is the documented behaviour of re-posting a key.
 func (s *SecretKey) Update(ctx context.Context, req *resource.UpdateRequest) (*resource.UpdateResult, error) {
 	app, name, err := prov.ParseTwoPart(req.NativeID)
 	if err != nil {

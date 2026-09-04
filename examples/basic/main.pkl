@@ -12,9 +12,11 @@
 // Setup:
 //   export FLY_API_TOKEN=$(fly auth token)     # or FLY_ACCESS_TOKEN
 //   export FLY_ORG=<your org slug, or "personal">
-//   formae apply --mode reconcile --watch examples/basic/main.pkl
+//   formae apply --mode reconcile --yes examples/basic/main.pkl
 //
-// Machine create is async (image pull + boot, 5-90s); --watch shows progress.
+// Machine create is async (image pull + boot, 5-90s). `formae apply` returns
+// once the agent accepts the command and prints a command id; poll it with
+//   formae command status <id> --output-layout detailed
 //
 // COSTS MONEY: the machine bills per second while it runs. shared-cpu-1x with
 // 256 MB is the cheapest Fly offers. Tear it down with:

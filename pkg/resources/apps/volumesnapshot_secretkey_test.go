@@ -9,6 +9,7 @@ package apps
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -143,7 +144,7 @@ func TestSecretKeyCreateRejectsBadBase64(t *testing.T) {
 	s := newStub(t, map[string]route{})
 	k := &SecretKey{Client: s.client(), Target: s.target()}
 	res, _ := k.Create(context.Background(), &resource.CreateRequest{
-		Properties: mustJSON(t, map[string]any{"appName": "a", "name": "n", "value": "!!not base64!!"}),
+		Properties: mustJSON(t, map[string]any{"appName": "a", "name": "n", "keyType": "hs256", "value": "!!not base64!!"}),
 	})
 	if res.ProgressResult.OperationStatus != resource.OperationStatusFailure {
 		t.Error("malformed base64 must fail before reaching the API")
@@ -173,5 +174,46 @@ func TestSecretKeyReadEncodesPublicKeyAndHidesMaterial(t *testing.T) {
 	// Private material is write-only and must never surface.
 	if _, ok := props["value"]; ok {
 		t.Error("key material leaked into Read output")
+	}
+}
+
+// keyType is required by the API even though the OpenAPI spec marks it
+// optional: omitting it answers 400 and lists the accepted set. Fail locally
+// rather than spending a round trip to learn that.
+func TestSecretKeyCreateRequiresKeyType(t *testing.T) {
+	s := newStub(t, map[string]route{})
+	k := &SecretKey{Client: s.client(), Target: s.target()}
+	res, _ := k.Create(context.Background(), &resource.CreateRequest{
+		Properties: mustJSON(t, map[string]any{"appName": "my-api", "name": "signing"}),
+	})
+	if res.ProgressResult.OperationStatus != resource.OperationStatusFailure {
+		t.Error("a missing keyType must fail before reaching the API")
+	}
+	if len(s.calls) != 0 {
+		t.Errorf("reached the API without a keyType: %+v", s.calls)
+	}
+	// The message should name the valid values, since the user cannot guess them.
+	if !strings.Contains(res.ProgressResult.StatusMessage, "hs256") {
+		t.Errorf("message should list accepted types, got: %s", res.ProgressResult.StatusMessage)
+	}
+}
+
+// nacl_box and friends return public_key as a base64 STRING, though the spec
+// declares an array of integers. []byte handles the string form; this pins it.
+func TestSecretKeyReadDecodesBase64PublicKeyString(t *testing.T) {
+	s := newStub(t, map[string]route{
+		"GET /v1/apps/my-api/secretkeys/box": {200,
+			`{"name":"box","type":"nacl_box","public_key":"BuUfsVYTY5XMtZ6JL1LtlYdb1XPFTGgv9jPa8G40KX0="}`},
+	})
+	k := &SecretKey{Client: s.client(), Target: s.target()}
+	res, _ := k.Read(context.Background(), &resource.ReadRequest{
+		ResourceType: ResourceTypeSecretKey, NativeID: "my-api/box",
+	})
+	if res.ErrorCode != "" {
+		t.Fatalf("ErrorCode = %q", res.ErrorCode)
+	}
+	props := decodeProps(t, res.Properties)
+	if props["publicKey"] != "BuUfsVYTY5XMtZ6JL1LtlYdb1XPFTGgv9jPa8G40KX0=" {
+		t.Errorf("publicKey = %v", props["publicKey"])
 	}
 }

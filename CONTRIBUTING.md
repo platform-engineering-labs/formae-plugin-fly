@@ -42,7 +42,7 @@ make install
 formae agent start
 
 # Apply example resources
-formae apply --mode reconcile --watch examples/basic/main.pkl
+formae apply --mode reconcile --yes examples/basic/main.pkl
 ```
 
 ## Conformance Testing

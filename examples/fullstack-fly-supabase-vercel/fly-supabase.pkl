@@ -25,7 +25,7 @@
  *   export SUPABASE_DB_PASS=<postgres password, >= 8 chars>
  *   export APP_SLUG=<globally-unique name>
  *
- *   formae apply --mode reconcile --watch examples/fullstack-fly-supabase-vercel/fly-supabase.pkl
+ *   formae apply --mode reconcile --yes examples/fullstack-fly-supabase-vercel/fly-supabase.pkl
  *
  * Costs money: a Supabase project is a real database, and the Fly machine bills
  * per second while it runs. Tear down with `formae destroy` on the same file.
