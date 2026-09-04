@@ -65,6 +65,14 @@ for any of them, so every field is `createOnly` and a change is a replacement.
 
 ### Notes and known limitations
 
+- **Rate limit is 3 requests/second namespace-wide**, Fly's documented burst.
+  It began at 1 and that was too conservative: machine discovery timed out
+  against the conformance harness's 2-minute window because a discovery sweep
+  serialises dozens of requests across 14 resource types, five of which fan out
+  per app or per cluster. No 429s were observed at either setting. Formae's
+  limiter has one per-namespace knob, so it cannot express Fly's real
+  per-action, per-object limits.
+
 - **Single transport.** Everything is REST. Certificates and IP assignments are
   first-class REST endpoints now, so no GraphQL client is needed; the resources
   that would require one (organizations, WireGuard peers, egress IPs, Upstash

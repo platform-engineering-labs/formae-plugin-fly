@@ -102,22 +102,32 @@ func (p *Plugin) dispatch(resourceType string, targetCfg json.RawMessage) (prov.
 // Configuration
 // =============================================================================
 
-// RateLimit caps the plugin at 1 request/second across the namespace.
+// RateLimit caps the plugin at 3 requests/second across the namespace.
 //
 // Fly documents 1 req/s per action with a short-term burst to 3, scoped per
-// machine or app id, plus 5 req/s for GET machine and 100 app deletions/minute.
-// Formae's limiter has one per-namespace knob, so the choice is between the
-// documented steady-state floor and a higher number that gambles on the
-// per-action split. 1 wins: the plugin's traffic is dominated by Status()
-// polling and discovery List(), which are GETs spread over many objects and
-// nowhere near the cap, while the operations that really are limited to 1/s
-// (create machine, start machine) happen once per resource. Chasing the burst
-// allowance would trade a real 429 risk on concurrent machine creates for
-// latency formae does not need.
+// machine or app id, plus 5 req/s for GET machine (burst 10) and 100 app
+// deletions/minute. Formae's limiter has a single per-namespace knob, so it
+// cannot express "per action, per object" — every FLY request shares one budget.
+//
+// This started at 1, reasoning that it was the documented steady-state floor for
+// the strictest action. That was too conservative, and CI proved it: machine
+// discovery timed out after the harness's 2-minute window, and the agent logged
+// "Discovery already running, consider configuring a longer interval" ten times
+// in a single run. Discovery walks all 14 resource types, and five of them fan
+// out one request per app or per cluster, so a sweep is dozens of serialised
+// requests — at 1 req/s that is most of a minute before the machine listing is
+// even reached.
+//
+// 3 is Fly's documented burst, and discovery is almost entirely GETs, which Fly
+// limits far more loosely than writes. There were zero 429s anywhere in the run
+// that failed, so 1 was not protecting against anything observable. If sustained
+// 3 req/s does start drawing 429s, the transport already classifies them as
+// Throttling, which formae treats as recoverable and retries — a slower apply
+// rather than a failed one.
 func (p *Plugin) RateLimit() model.RateLimitConfig {
 	return model.RateLimitConfig{
 		Scope:                            model.RateLimitScopeNamespace,
-		MaxRequestsPerSecondForNamespace: 1,
+		MaxRequestsPerSecondForNamespace: 3,
 	}
 }
 

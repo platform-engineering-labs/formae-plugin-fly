@@ -176,15 +176,20 @@ func TestClientIsCachedPerBaseURL(t *testing.T) {
 	}
 }
 
-func TestRateLimitIsOnePerSecond(t *testing.T) {
+// 3 is Fly's documented burst ceiling. Pinned by a test because the value is a
+// judgement call with a failure mode at each end: too low and discovery cannot
+// finish a sweep inside the harness's 2-minute window (which is how it was
+// found — machine discovery timed out in CI at 1 req/s); too high and Fly starts
+// answering 429.
+func TestRateLimitIsFlysDocumentedBurst(t *testing.T) {
 	p := &Plugin{}
 	rl := p.RateLimit()
 	if rl.Scope != model.RateLimitScopeNamespace {
 		t.Errorf("Scope = %v", rl.Scope)
 	}
-	// Fly documents 1 req/s per action; formae's knob is per-namespace.
-	if rl.MaxRequestsPerSecondForNamespace != 1 {
-		t.Errorf("MaxRequestsPerSecondForNamespace = %v, want 1", rl.MaxRequestsPerSecondForNamespace)
+	if rl.MaxRequestsPerSecondForNamespace != 3 {
+		t.Errorf("MaxRequestsPerSecondForNamespace = %v, want 3 (Fly's documented burst)",
+			rl.MaxRequestsPerSecondForNamespace)
 	}
 }
 

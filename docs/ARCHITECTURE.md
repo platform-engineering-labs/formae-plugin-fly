@@ -308,7 +308,7 @@ invisible backoff fighting the first.
 
 ## Rate limiting
 
-`RateLimit()` returns `MaxRequestsPerSecondForNamespace: 1`, scope `Namespace`.
+`RateLimit()` returns `MaxRequestsPerSecondForNamespace: 3`, scope `Namespace`.
 
 Fly's documented limits are **1 req/s per action with a burst to 3 req/s**, scoped per
 identifier (machine ID or app ID depending on the request), with `GET` on a machine
@@ -317,13 +317,29 @@ has one knob and it is per-namespace, not per-action-per-object. So the choice i
 1 (the documented steady-state floor for the strictest action) and something higher that
 exploits the per-action split.
 
-Picked 1. The plugin's own traffic is dominated by `Status()` polling and discovery
-`List()`, both of which are `GET`s spread across many objects and nowhere near the limit
-at 1 req/s; the operations that *are* limited to 1/s (create machine, start machine) are
-one-per-resource. Setting 3 to chase the burst allowance would trade a real 429 risk on
-concurrent machine creates — Fly's burst is short-term, not sustained — for latency
-formae does not need. If a large stack turns out to be slow, the honest fix is
-per-action limiting in the SDK, not a bigger number here.
+This started at 1, on the reasoning that it was the documented steady-state floor for the
+strictest action and that chasing the burst allowance would risk 429s for latency formae
+did not need. **That was wrong, and CI is what proved it.**
+
+In the first live CI run, `FLY::Apps::Machine` discovery failed with
+`resource not discovered: timeout after 2m0s ... (4 discovery trigger attempts)`, and the
+agent logged `Discovery already running, consider configuring a longer interval` ten
+times in that one run. Discovery walks all 14 resource types, and five of them fan out one
+request per app or per cluster (Secrets, Certificate, IPAddress, SecretKey, and the
+Postgres children), so one sweep is dozens of serialised requests. At 1 req/s that is most
+of a minute before the machine listing is even reached — the same arithmetic tabulated
+under Discovery below, arrived at the hard way.
+
+Raised to 3, which is Fly's documented burst. Two things justify it beyond the doc:
+discovery is almost entirely `GET`s, which Fly limits far more loosely than writes (5 req/s
+with burst 10 for `GET` machine), and the failing run contained **zero** 429 responses — so
+1 req/s was not protecting against anything observable. If sustained 3 req/s does start
+drawing 429s, the transport classifies them as `Throttling`, which formae treats as
+recoverable and retries: a slower apply rather than a failed one.
+
+The real fix remains per-action limiting in the SDK. A single per-namespace number cannot
+distinguish "create machine, 1/s per machine" from "list machines, 5/s" — 3 is the best
+available compromise, not a correct model of Fly's limits.
 
 ---
 
