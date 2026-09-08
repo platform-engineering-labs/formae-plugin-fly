@@ -8,6 +8,7 @@ package apps
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/registry"
@@ -423,5 +424,65 @@ func TestMachineStatusStartedCarriesProperties(t *testing.T) {
 	props := decodeProps(t, string(raw))
 	if props["id"] != "abc" || props["privateIp"] != "fdaa:0:1::3" || props["appName"] != "my-api" {
 		t.Errorf("props = %+v", props)
+	}
+}
+
+func TestMachineAutostopResponsesPreservePolicyAcrossOperations(t *testing.T) {
+	for _, tt := range []struct{ raw, want string }{
+		{`false`, "off"}, {`true`, "stop"}, {`"off"`, "off"},
+		{`"stop"`, "stop"}, {`"suspend"`, "suspend"}, {`null`, ""},
+	} {
+		t.Run(tt.raw, func(t *testing.T) {
+			body := `{"id":"abc","state":"started","config":{"image":"image:v1","services":[{"internal_port":8787,"autostop":` + tt.raw + `}]}}`
+			m, stub := newMachine(t, map[string]route{
+				"GET /v1/apps/my-api/machines/abc":  {200, body},
+				"POST /v1/apps/my-api/machines/abc": {200, body},
+				"POST /v1/apps/my-api/machines":     {200, body},
+			})
+			props := mustJSON(t, map[string]any{"appName": "my-api", "image": "image:v1", "services": []any{map[string]any{"internalPort": 8787, "autostop": tt.want}}})
+			created, err := m.Create(context.Background(), &resource.CreateRequest{Properties: props})
+			if err != nil || created.ProgressResult.OperationStatus != resource.OperationStatusInProgress {
+				t.Fatalf("Create: %v, %+v", err, created)
+			}
+			updated, err := m.Update(context.Background(), &resource.UpdateRequest{NativeID: "my-api/abc", DesiredProperties: props})
+			if err != nil || updated.ProgressResult.OperationStatus != resource.OperationStatusInProgress {
+				t.Fatalf("Update: %v, %+v", err, updated)
+			}
+			for _, call := range stub.calls {
+				service := call.Body["config"].(map[string]any)["services"].([]any)[0].(map[string]any)
+				value, exists := service["autostop"]
+				if tt.want == "" {
+					if exists {
+						t.Fatalf("absent policy sent as %v", value)
+					}
+				} else if value != tt.want {
+					t.Fatalf("outbound policy = %v, want %q", value, tt.want)
+				}
+			}
+			read, err := m.Read(context.Background(), &resource.ReadRequest{NativeID: "my-api/abc"})
+			if err != nil || read.ErrorCode != "" {
+				t.Fatalf("Read: %v, %+v", err, read)
+			}
+			status, err := m.Status(context.Background(), &resource.StatusRequest{RequestID: "my-api/abc"})
+			if err != nil || status.ProgressResult.OperationStatus != resource.OperationStatusSuccess {
+				t.Fatalf("Status: %v, %+v", err, status)
+			}
+			var got MachineProperties
+			if err := json.Unmarshal([]byte(read.Properties), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Services[0].Autostop != tt.want {
+				t.Fatalf("policy = %q, want %q", got.Services[0].Autostop, tt.want)
+			}
+		})
+	}
+}
+
+func TestMachineAutostopRejectsUnexpectedJSONTypes(t *testing.T) {
+	for _, raw := range []string{`123`, `{}`, `[]`} {
+		var response machineAPI
+		if err := json.Unmarshal([]byte(`{"config":{"services":[{"autostop":`+raw+`}]}}`), &response); err == nil {
+			t.Errorf("accepted autostop %s", raw)
+		}
 	}
 }

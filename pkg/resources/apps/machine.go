@@ -7,6 +7,7 @@ package apps
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/prov"
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/registry"
@@ -141,13 +142,39 @@ type machinePortAPI struct {
 	ForceHTTPS *bool    `json:"force_https,omitempty"`
 }
 
+// Fly returns legacy booleans for off/stop even when requests use strings.
+// Normalize at the API boundary so reads do not create spurious policy drift.
+type machineAutostopAPI string
+
+func (a *machineAutostopAPI) UnmarshalJSON(data []byte) error {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	switch v := value.(type) {
+	case nil:
+		*a = ""
+	case bool:
+		if v {
+			*a = "stop"
+		} else {
+			*a = "off"
+		}
+	case string:
+		*a = machineAutostopAPI(v)
+	default:
+		return fmt.Errorf("autostop must be a string, boolean, or null")
+	}
+	return nil
+}
+
 type machineServiceAPI struct {
-	InternalPort       int              `json:"internal_port,omitempty"`
-	Protocol           string           `json:"protocol,omitempty"`
-	Ports              []machinePortAPI `json:"ports,omitempty"`
-	Autostart          *bool            `json:"autostart,omitempty"`
-	Autostop           string           `json:"autostop,omitempty"`
-	MinMachinesRunning *int             `json:"min_machines_running,omitempty"`
+	InternalPort       int                `json:"internal_port,omitempty"`
+	Protocol           string             `json:"protocol,omitempty"`
+	Ports              []machinePortAPI   `json:"ports,omitempty"`
+	Autostart          *bool              `json:"autostart,omitempty"`
+	Autostop           machineAutostopAPI `json:"autostop,omitempty"`
+	MinMachinesRunning *int               `json:"min_machines_running,omitempty"`
 }
 
 type machineMountAPI struct {
@@ -207,7 +234,7 @@ func (p MachineProperties) toConfigAPI() machineConfigAPI {
 			InternalPort:       s.InternalPort,
 			Protocol:           s.Protocol,
 			Autostart:          s.Autostart,
-			Autostop:           s.Autostop,
+			Autostop:           machineAutostopAPI(s.Autostop),
 			MinMachinesRunning: s.MinMachinesRunning,
 		}
 		for _, pt := range s.Ports {
@@ -258,7 +285,7 @@ func (a machineAPI) toProps(appName string) MachineProperties {
 			InternalPort:       s.InternalPort,
 			Protocol:           s.Protocol,
 			Autostart:          s.Autostart,
-			Autostop:           s.Autostop,
+			Autostop:           string(s.Autostop),
 			MinMachinesRunning: s.MinMachinesRunning,
 		}
 		for _, pt := range s.Ports {
