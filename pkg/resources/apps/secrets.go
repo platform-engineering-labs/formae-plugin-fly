@@ -56,10 +56,20 @@ func init() {
 // per-secret resources hit when applied concurrently (each concurrent
 // single-item write is a read-modify-write on the shared bag, last writer wins).
 //
-// Values are write-only. The list endpoint can reveal them via
-// ?show_secrets=true and this plugin deliberately never asks: pulling secret
-// values into formae's state to detect drift on them would be a worse trade
-// than not detecting it. Added and removed *names* are still detected.
+// The bag is a first-class secret (formae.Secret): Read asks the list endpoint
+// for the values with ?show_secrets=true and reports them on decodedValues, so
+// a consumer can reference one as `bag.res.secretValue.at("KEY")`. The agent
+// re-reads on every plugin call, so a secret rotated out of band — including
+// the DATABASE_URL a Postgres attachment injects, which formae never wrote —
+// resolves to its current value without an apply.
+//
+// Reveal is scoped to Read on purpose. List walks every app in the org, and
+// revealing there would pull the whole org's plaintext through the agent for
+// resources nobody asked to manage. A token allowed to list secrets but not to
+// reveal them still reads the bag, just without the values.
+//
+// The authored `values` field stays write-only: it is never echoed back, so
+// value drift is still not detected — only an added or removed name.
 type Secrets struct {
 	Client *flytransport.Client
 	Target *registry.TargetConfig
@@ -69,6 +79,13 @@ type Secrets struct {
 type SecretsProperties struct {
 	AppName string            `json:"appName,omitempty"`
 	Values  map[string]string `json:"values,omitempty"`
+
+	// DecodedValues is the read side of the bag, populated by Read alone. It
+	// is the resource's secret value property, so `bag.res.secretValue.at(k)`
+	// resolves against it. Kept separate from Values so an authored bag and a
+	// read one never look alike: Values is what the author wrote and is never
+	// echoed back, which is what keeps values out of drift detection.
+	DecodedValues map[string]string `json:"decodedValues,omitempty"`
 }
 
 // appFromSecretsNativeID extracts the app name from "{app}/secrets", tolerating
@@ -103,7 +120,14 @@ func (s *Secrets) Read(ctx context.Context, req *resource.ReadRequest) (*resourc
 	if app == "" {
 		return prov.FailRead(req.ResourceType, resource.OperationErrorCodeInvalidRequest), nil
 	}
-	names, err := s.names(ctx, app)
+	secrets, err := s.list(ctx, app, true)
+	if err != nil && flytransport.ClassifyError(err) == resource.OperationErrorCodeAccessDenied {
+		// The token may list secrets but not reveal them. Read the names alone
+		// rather than failing: everything except the secretValue accessor keeps
+		// working, and a plugin that refused to read at all would break sync
+		// for every read-only token that works today.
+		secrets, err = s.list(ctx, app, false)
+	}
 	if err != nil {
 		if flytransport.IsNotFound(err) {
 			return prov.NotFoundRead(req.ResourceType), nil
@@ -113,12 +137,20 @@ func (s *Secrets) Read(ctx context.Context, req *resource.ReadRequest) (*resourc
 	// The endpoint stays 200 with an empty list after the last secret is
 	// deleted out of band. The bag exists only while it holds at least one
 	// secret; otherwise report NotFound so formae clears it from inventory.
-	if len(names) == 0 {
+	if len(secrets) == 0 {
 		return prov.NotFoundRead(req.ResourceType), nil
 	}
-	// Values are write-only, so only the app name is reported. Formae does not
-	// diff write-only fields.
-	return prov.OKRead(req.ResourceType, SecretsProperties{AppName: app}), nil
+	props := SecretsProperties{AppName: app}
+	for _, sec := range secrets {
+		if sec.Value == "" {
+			continue
+		}
+		if props.DecodedValues == nil {
+			props.DecodedValues = make(map[string]string, len(secrets))
+		}
+		props.DecodedValues[sec.Name] = sec.Value
+	}
+	return prov.OKRead(req.ResourceType, props), nil
 }
 
 func (s *Secrets) Update(ctx context.Context, req *resource.UpdateRequest) (*resource.UpdateResult, error) {
@@ -227,24 +259,44 @@ func (s *Secrets) bulkSet(ctx context.Context, app string, values map[string]str
 	}, nil)
 }
 
-// names lists the secret names on an app. show_secrets is deliberately not
-// requested — see the type comment.
-func (s *Secrets) names(ctx context.Context, app string) ([]string, error) {
-	var resp struct {
-		Secrets []struct {
-			Name string `json:"name"`
-		} `json:"secrets"`
+// appSecret is one entry of the bag. Value is populated only when the request
+// asked to reveal.
+type appSecret struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// list reads the app's bag. reveal asks Fly for the values as well as the
+// names; only Read passes true — see the type comment.
+func (s *Secrets) list(ctx context.Context, app string, reveal bool) ([]appSecret, error) {
+	req := flytransport.Request{Method: "GET", Path: "/v1/apps/" + app + "/secrets"}
+	if reveal {
+		req.Query = map[string]string{"show_secrets": "true"}
 	}
-	if err := s.Client.Do(ctx, flytransport.Request{
-		Method: "GET", Path: "/v1/apps/" + app + "/secrets",
-	}, &resp); err != nil {
+	var resp struct {
+		Secrets []appSecret `json:"secrets"`
+	}
+	if err := s.Client.Do(ctx, req, &resp); err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(resp.Secrets))
+	out := make([]appSecret, 0, len(resp.Secrets))
 	for _, sec := range resp.Secrets {
 		if sec.Name != "" {
-			names = append(names, sec.Name)
+			out = append(out, sec)
 		}
+	}
+	return out, nil
+}
+
+// names lists the secret names on an app, without revealing anything.
+func (s *Secrets) names(ctx context.Context, app string) ([]string, error) {
+	secrets, err := s.list(ctx, app, false)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(secrets))
+	for _, sec := range secrets {
+		names = append(names, sec.Name)
 	}
 	return names, nil
 }

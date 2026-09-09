@@ -22,9 +22,18 @@ First release. Requires formae 0.89.0 or newer.
   and `formae.value(x).opaque` on it is redundant. `Secrets.values` entries are
   not, because formae derives opacity from a field's declared type and does not
   descend into map value positions — keep using `formae.value(x).opaque` there.
-- Fly remains a secret *destination*, not a source: no Fly resource extends
-  `formae.Secret`, because that would mean pulling every app secret's plaintext
-  through the agent via `?show_secrets=true` on every read.
+- `FLY::Apps::Secrets` is a first-class secret resource (`formae.Secret` +
+  `MapSecretResolvable`), so an entry is reachable as
+  `bag.res.secretValue.at("KEY")` — including the `DATABASE_URL` that
+  `FLY::Postgres::Attachment` injects, which formae never wrote and could not
+  otherwise reference. `Read` reveals the bag
+  (`GET /v1/apps/{app}/secrets?show_secrets=true`) onto a new read-only
+  `decodedValues` field; `values` stays the write side and is still never echoed
+  back, so value drift remains undetected. Reveal is scoped to `Read`: `List`
+  walks every app in the org during discovery and never reveals. A token that
+  may list secrets but not reveal them falls back to a names-only read rather
+  than failing, so read-only tokens keep working; `401` still surfaces as a
+  credential error.
 - Examples: the full-stack examples draw the Postgres password from a
   `formae.PasswordGenerator` bound to both Supabase's `dbPass` and the Fly
   secret, so the two are provably equal and the `SUPABASE_DB_PASS` env var is
@@ -118,10 +127,11 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   records only the user can publish, so `status` can stay `pending_validation`
   indefinitely; the records are surfaced in the `dnsRequirements` output.
 - **`Secrets.values` is write-only.** Value drift cannot be detected — only an
-  added or removed name. The plugin never asks Fly to reveal values, which is
-  also why no Fly resource is a `formae.Secret`. Per-entry opacity is available
-  via `formae.value(x).opaque`; a field-level `opaque` hint is not expressible
-  for a map-valued field on formae 0.89.0.
+  added or removed name. Read reveals the bag onto the separate read-only
+  `decodedValues` field, which exists to resolve `secretValue` references, not
+  to diff. Per-entry opacity on `values` is available via
+  `formae.value(x).opaque`; a field-level `opaque` hint is not expressible for a
+  map-valued field on formae 0.89.0.
 - **`SecretKey.keyType` is required and immutable.** The OpenAPI spec marks it
   optional; omitting it answers 400 and lists the accepted set (`hs256`,
   `hs384`, `hs512`, `xaes256gcm`, `nacl_auth`, `nacl_box`, `nacl_secretbox`,

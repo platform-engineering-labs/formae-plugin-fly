@@ -62,16 +62,19 @@ Behaviour that will surprise you otherwise:
 - **`VolumeSnapshot` and `Postgres::Backup` cannot be deleted.** Fly exposes no
   delete endpoint; both expire under a retention policy. Their delete reports
   success and says so.
-- **`Secrets.values` is write-only.** Value drift cannot be detected, only an
-  added or removed name. Wrap sensitive entries in `formae.value(x).opaque` to
-  have them hashed at rest — opacity is per entry here, because formae derives
-  it from a field's declared type and does not descend into map value positions.
-  `SecretKey.value` is a scalar and *is* typed opaque, so it is hashed at rest
-  whatever form you write it in.
-- **Fly holds no readable secret.** No Fly resource is a `formae.Secret`, so
-  nothing here answers `secret.res.secretValue`. Fly's API can reveal app secret
-  values (`GET /v1/apps/{app}/secrets?show_secrets=true`) and this plugin
-  deliberately never asks. Fly is a secret *destination*, not a source.
+- **`Secrets.values` is write-only.** It is never echoed back, so value drift is
+  still not detected — only an added or removed name. Wrap sensitive entries in
+  `formae.value(x).opaque` to have them hashed at rest: opacity is per entry
+  here, because formae derives it from a field's declared type and does not
+  descend into map value positions. `SecretKey.value` and the bag's read-only
+  `decodedValues` are typed opaque and hashed at rest whatever you write.
+- **`FLY::Apps::Secrets` is a `formae.Secret`.** Read reveals the bag
+  (`GET /v1/apps/{app}/secrets?show_secrets=true`) onto a read-only
+  `decodedValues` field, so an entry is referenceable as
+  `bag.res.secretValue.at("KEY")` — including the `DATABASE_URL` a Postgres
+  attachment injects, which formae never wrote. Reveal happens on **Read only**;
+  discovery lists names. A token that may list but not reveal still reads the
+  bag, just without the values.
 
 ## Configuration
 
@@ -168,6 +171,34 @@ local apiSecrets = new fly.Secrets {
   }
 }
 ```
+
+Fly reads secrets back, too. `FLY::Apps::Secrets` is a `formae.Secret` whose
+value is the bag, so an entry is reachable by key — including one Fly wrote
+itself:
+
+```pkl
+local pg = new fly.Attachment {
+  label = "api-db"
+  clusterId = cluster.res.id
+  appName = api.res.name          // Fly injects DATABASE_URL into this app
+}
+
+local apiSecrets = new fly.Secrets {
+  label = "api-secrets"
+  appName = api.res.name
+  values { ["SESSION_SECRET"] = sessionPw.gen.value }
+}
+
+// Somewhere else entirely — another plugin, another stack:
+//   dsn = apiSecrets.res.secretValue.at("DATABASE_URL")
+```
+
+The bag does not declare `DATABASE_URL`, and must not: Fly owns that key and the
+two would fight over it. Reading it back is fine — `values` is the write side,
+`decodedValues` the read side, and they are separate fields.
+
+`secretValue` on a map-shaped secret is an accessor, not a value: `.at(key)` is
+required and a bare `secretValue` will not type-check.
 
 Or hand Fly a secret another provider holds. It is read live on every plugin
 call, so rotating it upstream takes effect without re-applying here:

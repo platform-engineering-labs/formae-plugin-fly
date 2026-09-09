@@ -309,10 +309,35 @@ v0.2.6 that comparison was literal and an opaque value failed it.
 
 Naming `formae.ValueSource` on both fields also widens them to `formae.GeneratorOutput`,
 which is what lets a Fly secret bind to a `PasswordGenerator` or `KeyPairGenerator`, and
-to a `SecretValueResolvable`, which is what lets it take another provider's secret. Fly
-is a destination for both. It is not a source: no Fly resource extends `formae.Secret`,
-because that would mean calling `GET /v1/apps/{app}/secrets?show_secrets=true` and
-pulling every app secret's plaintext through the agent on every read.
+to a `SecretValueResolvable`, which is what lets it take another provider's secret.
+
+### The bag as a secret source
+
+`FLY::Apps::Secrets` extends `formae.Secret`, so Fly is a source as well as a
+destination. Three decisions make that safe enough to be worth it:
+
+**A separate read field.** The value property is `decodedValues`, not `values`. `values`
+is what the author writes and is still never echoed back, so value drift stays
+undetectable and an authored bag never looks like read state. `decodedValues` is
+`writeOnly` and `hasProviderDefault` — the K8S plugin's `Secret.decodedData` shape — so it
+exists to resolve references and nothing else. Verified on the rendered hints:
+`Opaque`, `WriteOnly` and `HasProviderDefault` are all `true`, and
+`bag.res.secretValue.at("DATABASE_URL")` resolves to the property path
+`decodedValues.DATABASE_URL`.
+
+**Reveal only on Read.** `List` walks every app in the org during discovery. Revealing
+there would pull the whole org's plaintext through the agent for resources nobody asked to
+manage, so `list(ctx, app, reveal)` takes the flag and only `Read` passes `true`.
+
+**A denied reveal is not a failed read.** A token may be allowed to list secrets and not
+to reveal them. `Read` retries without `show_secrets` on `AccessDenied` and reports the
+bag without values; only the `secretValue` accessor is lost. Refusing to read at all would
+break sync for every read-only token that works today. `401` is not treated this way — a
+broken token must surface as one.
+
+What this buys, beyond uniformity with the other plugins: entries Fly writes itself become
+referenceable. `FLY::Postgres::Attachment` injects a `DATABASE_URL` that formae never
+authored and, before this, could not reach at all.
 - The error body's message field is `message` on some upstreams and `error` on others
   (§ Transport). The decoder probes `message`, `error`, `msg` in that order.
 
