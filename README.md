@@ -8,7 +8,8 @@ enables Formae to manage Fly.io resources using the [Machines REST
 API](https://docs.machines.dev/) — apps, machines, volumes, secrets,
 certificates, IP addresses and Managed Postgres.
 
-Requires formae **0.84.0** or newer.
+Requires formae **0.89.0** or newer — the schema uses `formae.ValueSource`, the
+0.89.0 secret/generator binding type.
 
 ## Supported Resources
 
@@ -63,7 +64,14 @@ Behaviour that will surprise you otherwise:
   success and says so.
 - **`Secrets.values` is write-only.** Value drift cannot be detected, only an
   added or removed name. Wrap sensitive entries in `formae.value(x).opaque` to
-  have them hashed at rest.
+  have them hashed at rest — opacity is per entry here, because formae derives
+  it from a field's declared type and does not descend into map value positions.
+  `SecretKey.value` is a scalar and *is* typed opaque, so it is hashed at rest
+  whatever form you write it in.
+- **Fly holds no readable secret.** No Fly resource is a `formae.Secret`, so
+  nothing here answers `secret.res.secretValue`. Fly's API can reveal app secret
+  values (`GET /v1/apps/{app}/secrets?show_secrets=true`) and this plugin
+  deliberately never asks. Fly is a secret *destination*, not a source.
 
 ## Configuration
 
@@ -131,6 +139,51 @@ agent, often in a container with no `$HOME/.fly`.
 curl -s -H "Authorization: Bearer $FLY_API_TOKEN" \
   https://api.machines.dev/v1/tokens/current | jq
 ```
+
+### Secrets
+
+`FLY::Apps::Secrets` entries and `FLY::Apps::SecretKey.value` take
+`formae.ValueSource`, so a credential need never be written into a forma. (On
+`SecretKey.value` a generator draw type-checks but will not be valid key
+material — Fly wants base64 sized for the `keyType`. Omit the field and let Fly
+generate the key.)
+
+Let formae draw it. Without a `rotation` the value is drawn once and never
+changes — the replacement for minting a password at eval time and pinning it
+with `setOnce`. With one, formae rotates on the cadence and moves every
+destination bound to the generator together:
+
+```pkl
+local sessionPw = new formae.PasswordGenerator {
+  label = "api-session-secret"
+  stack = appStack.res
+  rotation = new formae.RotationSpec { every = 30.d }
+}
+
+local apiSecrets = new fly.Secrets {
+  label = "api-secrets"
+  appName = api.res.name
+  values {
+    ["SESSION_SECRET"] = sessionPw.gen.value
+  }
+}
+```
+
+Or hand Fly a secret another provider holds. It is read live on every plugin
+call, so rotating it upstream takes effect without re-applying here:
+
+```pkl
+values {
+  ["DB_PASSWORD"] = dbSecret.res.secretValue          // scalar secret
+  ["API_KEY"]     = vaultSecret.res.secretValue.at("api-key")  // map-shaped
+  ["TOKEN"]       = appSecret.res.secretValue.json("creds.token")
+}
+```
+
+A reference is a handle, not a string: pass it whole, never interpolated.
+
+Rotation inherits the Fly caveat noted above: a running machine does not pick up
+the new value until it restarts, and formae will not restart it for you.
 
 ## Examples
 

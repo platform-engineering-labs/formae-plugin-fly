@@ -46,12 +46,15 @@ runtime — the backend builds its Postgres DSN from `SUPABASE_PROJECT_REF` and
 `https://${NEXT_PUBLIC_API_APP}.fly.dev`. That is also the more robust shape: a hostname
 assembled at deploy time cannot go stale.
 
-**The Postgres password comes from an environment variable, not from
-`random.password(...).setOnce`.** It has to be *the same value* in two places — Supabase's
-`dbPass` and the Fly secret the backend reads — and `setOnce` is scoped per resource
-field, so two `setOnce` expressions would generate two different passwords and the
-backend would silently fail to connect. One env var makes them provably equal. `.opaque`
-still applies at both ends, so the value is hashed at rest and never printed.
+**The Postgres password is drawn by a `formae.PasswordGenerator`, not by you.** It has to
+be *the same value* in two places — Supabase's `dbPass` and the Fly secret the backend
+reads — and both bind to the same `dbPassGen.gen.value`, so they are provably equal.
+`random.password(...).setOnce` could not do that: `setOnce` is scoped per resource field,
+so two of them would mint two different passwords and the backend would silently fail to
+connect. The generator carries no `rotation`, so the value is drawn once on the first
+apply and reused forever; add one and formae rotates the password and every destination
+bound to it in a single command. The drawn value never appears in a plan, in inventory,
+in a log, or in the forma.
 
 **The machine references the Secrets bag, not the app.** Fly injects secrets into a
 machine's environment *at boot*; a machine created before its secrets exist boots without
@@ -72,7 +75,6 @@ so a secret key in one is a secret key on the internet.
 | `FLY_ORG` | yes | Fly organization slug, or `personal` |
 | `SUPABASE_ACCESS_TOKEN` | yes | Supabase plugin auth. [supabase.com/dashboard/account/tokens](https://supabase.com/dashboard/account/tokens) |
 | `SUPABASE_ORGANIZATION_ID` | yes | Owns the project. [supabase.com/dashboard/org/_/general](https://supabase.com/dashboard/org/_/general) |
-| `SUPABASE_DB_PASS` | yes | Postgres password, ≥ 8 chars. Never written to the forma. |
 | `VERCEL_TOKEN` | `main.pkl` only | Vercel plugin auth. [vercel.com/account/settings/tokens](https://vercel.com/account/settings/tokens) |
 | `APP_SLUG` | recommended | Base name for everything. **Fly app names are unique across all of Fly.io**, so the default will already be taken. |
 | `API_IMAGE` | no | Backend container image. Defaults to `flyio/hellofly:latest`. |
@@ -84,13 +86,12 @@ export FLY_API_TOKEN=$(fly auth token)
 export FLY_ORG=personal
 export SUPABASE_ACCESS_TOKEN=sbp_...
 export SUPABASE_ORGANIZATION_ID=...
-export SUPABASE_DB_PASS="$(openssl rand -base64 24 | tr -d '/+=')"
 export VERCEL_TOKEN=...
 export APP_SLUG=my-fullstack-demo
 ```
 
-Keep `SUPABASE_DB_PASS` — the same value must be exported on every later apply, or
-Supabase and Fly will disagree about the password.
+There is no password to keep: formae holds the draw and hands the same value to Supabase
+and to Fly on every apply. Inspect the generator with `formae inventory generators`.
 
 ---
 
@@ -242,9 +243,11 @@ take well over a minute. `fly logs -a $APP_SLUG-api` shows the pull.
 a failure. The plugin reports `stopped` as a settled state precisely so it does not fight
 fly-proxy.
 
-**Backend cannot connect to Postgres** — check that `SUPABASE_DB_PASS` is the same value
-you exported on the first apply. If it changed, Supabase still has the original (`dbPass`
-is `createOnly`) while the Fly secret has the new one.
+**Backend cannot connect to Postgres** — the machine picks up a Fly secret only at boot,
+so if the password was rotated after the machine started, restart it. Note also that
+`dbPass` is `createOnly` on Supabase: a rotation reaches the Fly secret but cannot change
+the password on an existing project, so rotate this one only if you are prepared to
+replace the project.
 
 **Vercel `custom_domain_needs_upgrade`** — a Hobby project cannot take custom domains.
 This example does not add one; if you extended it with `vercel.Domain`, that is why.

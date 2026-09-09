@@ -37,7 +37,6 @@
  *   export FLY_ORG=<fly org slug, or "personal">
  *   export SUPABASE_ACCESS_TOKEN=sbp_...          # supabase.com/dashboard/account/tokens
  *   export SUPABASE_ORGANIZATION_ID=<org id>      # supabase.com/dashboard/org/_/general
- *   export SUPABASE_DB_PASS=<postgres password>   # >= 8 chars, see the note below
  *   export VERCEL_TOKEN=...                       # vercel.com/account/settings/tokens
  *   export APP_SLUG=<globally-unique name>        # Fly app names are global
  *
@@ -80,16 +79,36 @@ local appSlug = read?("env:APP_SLUG") ?? "formae-fullstack-demo"
 local flyRegion = read?("env:FLY_REGION_OVERRIDE") ?? "fra"
 local supabaseRegion = read?("env:SUPABASE_REGION") ?? "eu-central-1"
 
-// The Postgres password is read from the environment rather than generated with
-// `random.password(...).setOnce`, and that is deliberate: it has to be *the same
-// value* in two places — Supabase's `dbPass` and the Fly secret the backend
-// reads. `setOnce` is scoped per resource field, so two `setOnce` expressions
-// would generate two different passwords and the backend would silently fail to
-// connect. Reading one env var makes them provably equal.
+// The Postgres password is drawn by formae, not by you. A generator is one
+// value with many destinations: Supabase's `dbPass` and the Fly secret the
+// backend reads bind to the same `dbPassGen.gen.value`, so they are provably
+// equal. That is what `random.password(...).setOnce` could not do — `setOnce`
+// is scoped per resource field, so two of them would mint two different
+// passwords and the backend would silently fail to connect. It is also why
+// this file used to demand a `SUPABASE_DB_PASS` env var; it no longer does.
 //
-// `.opaque` still applies at both ends, so the value is hashed at rest and never
-// printed — and it is not in this file either way.
-local dbPassword = read("env:SUPABASE_DB_PASS")
+// No cadence, and deliberately none: Supabase's `dbPass` is createOnly, so a
+// rotating generator bound here would replace the project on every turn. The
+// value is drawn once on the first apply and reused forever. Where the
+// destination is mutable — a plain Fly secret, say — add
+//
+//   rotation = new formae.RotationSpec { every = 90.d }
+//
+// and formae turns the credential over unattended, moving every destination
+// bound to it in one command. A Fly machine still only picks up the new value
+// when it restarts, and formae will not restart it for you.
+//
+// The drawn value never appears in a plan, in inventory, in a log, or in this
+// file.
+local dbPassGen = new formae.PasswordGenerator {
+  label = "db-password"
+  stack = appStack.res
+  // Supabase requires >= 8 characters; 32 alphanumerics stays well clear of
+  // that and of any DSN-quoting question, since the backend interpolates the
+  // password straight into a postgresql:// URL.
+  length = 32
+  symbols = false
+}
 
 // Container image for the backend. Replace with your own API image; the default
 // is Fly's demo image, which serves HTTP on 8080 and proves the wiring reaches a
@@ -105,7 +124,7 @@ local db = new supabase.Project {
   name = "\(appSlug)-db"
   organizationId = supabaseOrg
   region = supabaseRegion
-  dbPass = formae.value(dbPassword).opaque
+  dbPass = dbPassGen.gen.value
   plan = "free"
 
   // Where Supabase Auth sends users back to after a magic link or OAuth round
@@ -148,9 +167,10 @@ local api = new fly.App {
 }
 
 // Fly injects these into the machine's environment at boot. Both entries cross a
-// provider boundary: the password as an opaque formae value, the secret key as a
-// resolvable formae substitutes at apply time. Neither appears in this forma, and
-// `values` is write-only so neither is diffed on later syncs.
+// provider boundary and neither appears in this forma: the password is a
+// generator binding formae draws, the secret key a reference to Supabase's own
+// secret, read live from the Management API on every plugin call. `values` is
+// write-only, so neither is diffed on later syncs.
 //
 // The backend composes its DSN at runtime:
 //   postgresql://postgres:$SUPABASE_DB_PASSWORD@db.$SUPABASE_PROJECT_REF.supabase.co:5432/postgres
@@ -158,8 +178,8 @@ local apiSecrets = new fly.Secrets {
   label = "api-secrets"
   appName = api.res.name
   values {
-    ["SUPABASE_DB_PASSWORD"] = formae.value(dbPassword).opaque
-    ["SUPABASE_SECRET_KEY"] = secretKey.res.apiKey
+    ["SUPABASE_DB_PASSWORD"] = dbPassGen.gen.value
+    ["SUPABASE_SECRET_KEY"] = secretKey.res.secretValue
   }
 }
 
@@ -251,11 +271,18 @@ local site = new vercel.Project {
 
 local allTargets = new Listing { "production"; "preview"; "development" }
 
+// Bound as a local because the password generator has to name its stack.
+local appStack = new formae.Stack {
+  label = "fullstack-fly-supabase-vercel"
+  description = "Supabase Postgres, a Fly.io API, and a Vercel frontend wired together"
+}
+
 forma {
-  new formae.Stack {
-    label = "fullstack-fly-supabase-vercel"
-    description = "Supabase Postgres, a Fly.io API, and a Vercel frontend wired together"
-  }
+  appStack
+
+  // The generator is a forma member in its own right: formae draws its value
+  // and delivers it to every property bound to it.
+  dbPassGen
 
   // One target per namespace. Each plugin reads its own credentials from the
   // environment; no token appears here.

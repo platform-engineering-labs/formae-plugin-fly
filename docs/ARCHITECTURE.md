@@ -291,12 +291,28 @@ formae 0.89.0 — setting `opaque = true` in the FieldHint is silently discarded
 by inspecting the rendered `Schema.Hints`).
 
 Opacity is available per entry instead. The field is typed
-`Mapping<String, (String|formae.Value)>`, so a sensitive entry can be written
+`Mapping<String, (String|formae.ValueSource)>`, so a sensitive entry can be written
 `formae.value(x).opaque`, which renders as `{"$value": …, "$visibility": "Opaque"}` and is
 hashed at rest by the agent; the plugin still receives a plain string. Plain-string
 entries are stored as written. The README and the examples use `formae.value(…).opaque`
 for anything that is actually a secret, and that is the guidance to follow until the SDK
 can express opacity on a map field.
+
+`FLY::Apps::SecretKey.value` is a scalar, so it takes the other route: naming
+`formae.ValueSource` puts `formae.SecretValue` in the union, `isSecretValueType` sees it,
+and the rendered hint carries `Opaque = true` (verified — `hints(SecretKey)["value"].Opaque`
+is `true` while `hints(Secrets)["values"].Opaque` is `false`). The agent then hashes the
+value at rest whatever form the author supplied, so `.opaque` on that field is redundant.
+conformance-tests v0.2.7 compares the stored SHA-256 digest against the authored
+plaintext, which is why the fixtures can declare a bare string on an opaque field — under
+v0.2.6 that comparison was literal and an opaque value failed it.
+
+Naming `formae.ValueSource` on both fields also widens them to `formae.GeneratorOutput`,
+which is what lets a Fly secret bind to a `PasswordGenerator` or `KeyPairGenerator`, and
+to a `SecretValueResolvable`, which is what lets it take another provider's secret. Fly
+is a destination for both. It is not a source: no Fly resource extends `formae.Secret`,
+because that would mean calling `GET /v1/apps/{app}/secrets?show_secrets=true` and
+pulling every app secret's plaintext through the agent on every read.
 - The error body's message field is `message` on some upstreams and `error` on others
   (§ Transport). The decoder probes `message`, `error`, `msg` in that order.
 

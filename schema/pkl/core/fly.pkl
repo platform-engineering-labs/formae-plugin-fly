@@ -494,15 +494,24 @@ class Secrets extends formae.Resource {
     /// a Mapping's value type. So on formae 0.89.0 a map-valued field cannot be
     /// marked opaque as a whole. Verified against the rendered schema Hints.
     /// `writeOnly` still applies and keeps the field out of drift detection.
-    /// An entry may also be a `formae.Resolvable`, which is what makes
-    /// cross-plugin wiring work: a credential produced by another plugin in the
-    /// same apply can be handed straight to Fly.
-    ///   ["SUPABASE_SECRET_KEY"] = secretKey.res.apiKey
+    ///
+    /// An entry is anything formae can supply — `formae.ValueSource` — which is
+    /// what makes cross-plugin wiring work. A credential produced by another
+    /// resource in the same apply goes straight in:
+    ///   ["SUPABASE_PROJECT_REF"] = db.res.id
+    /// A secret held by another provider is read live on every plugin call, so
+    /// rotating it upstream needs no re-apply here:
+    ///   ["DB_PASSWORD"] = dbSecret.res.secretValue
+    ///   ["API_KEY"]     = vaultSecret.res.secretValue.at("api-key")
+    /// And a generator binding lets formae draw the credential itself, once or
+    /// on a rotation cadence, moving this bag and everything else bound to it
+    /// together:
+    ///   ["SESSION_SECRET"] = sessionPw.gen.value
     /// formae orders the graph from the reference and substitutes the value at
-    /// apply time, so the credential never appears in this forma. A resolvable
+    /// apply time, so the credential never appears in this forma. A reference
     /// is a handle, not a string — pass it whole, never interpolated.
     @formae.FieldHint { writeOnly = true }
-    values: Mapping<String, (String|formae.Value|formae.Resolvable)>?
+    values: Mapping<String, (String|formae.ValueSource)>?
 }
 
 // =============================================================================
@@ -780,9 +789,26 @@ class SecretKey extends formae.Resource {
     ///
     /// Omit it and Fly generates the key, which is the safer default and what
     /// most callers want; supplying it means the material exists somewhere
-    /// outside Fly. Wrap it in `formae.value(x).opaque` if you do.
+    /// outside Fly.
+    ///
+    /// The `formae.ValueSource` arm carries `formae.SecretValue`, which is what
+    /// makes the field opaque in its rendered FieldHint: the agent hashes the
+    /// value at rest whatever form the author supplied it in, so a bare string
+    /// literal is as safe here as `formae.value(x).opaque` and the explicit
+    /// `.opaque` is now redundant. The same arm accepts a secret held by
+    /// another provider,
+    ///   value = vaultSecret.res.secretValue
+    /// read live on every plugin call, so rotating it upstream needs no
+    /// re-apply here.
+    ///
+    /// A generator binding (`pw.gen.value`, `keys.gen.privateKey`) type-checks
+    /// too, but read the encoding first: Fly wants base64 of raw key material
+    /// sized for `keyType`, and neither generator emits that — PasswordGenerator
+    /// draws a plain random string and KeyPairGenerator a PEM. Supplying either
+    /// unmodified answers 400. Omitting `value` and letting Fly generate the
+    /// key remains the right default.
     @formae.FieldHint { writeOnly = true }
-    value: (String|formae.Value)?
+    value: (String|formae.ValueSource)?
 
     /// Base64 public key, present only for asymmetric types (nacl_box, nacl_sign,
     /// es256). Output only. The spec declares this an array of integers; the API

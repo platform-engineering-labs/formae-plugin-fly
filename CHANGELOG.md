@@ -7,7 +7,38 @@ versioning follows [semver](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] — unreleased
 
-First release. Requires formae 0.84.0 or newer.
+First release. Requires formae 0.89.0 or newer.
+
+### Adopted the formae 0.89.0 secret model
+
+- `FLY::Apps::Secrets.values` entries and `FLY::Apps::SecretKey.value` are typed
+  `formae.ValueSource`, so either can be bound to a `PasswordGenerator` /
+  `KeyPairGenerator` output, or to another provider's secret
+  (`secret.res.secretValue`, `.at(key)`, `.json(path)`), instead of a literal.
+  A referenced secret is re-read from its provider on every plugin call, so
+  rotating it upstream needs no re-apply here.
+- `SecretKey.value` is now hashed at rest: it is a scalar, so the
+  `formae.SecretValue` arm of `ValueSource` makes the rendered FieldHint opaque
+  and `formae.value(x).opaque` on it is redundant. `Secrets.values` entries are
+  not, because formae derives opacity from a field's declared type and does not
+  descend into map value positions — keep using `formae.value(x).opaque` there.
+- Fly remains a secret *destination*, not a source: no Fly resource extends
+  `formae.Secret`, because that would mean pulling every app secret's plaintext
+  through the agent via `?show_secrets=true` on every read.
+- Examples: the full-stack examples draw the Postgres password from a
+  `formae.PasswordGenerator` bound to both Supabase's `dbPass` and the Fly
+  secret, so the two are provably equal and the `SUPABASE_DB_PASS` env var is
+  gone. No rotation cadence — `dbPass` is createOnly on Supabase.
+
+### Target formae 0.89.0
+
+- Pkl schema dependency bumped to `formae@0.89.0`; `minFormaeVersion` raised
+  from `0.84.0`, since the schema now names `formae.ValueSource`.
+- SDK to `pkg/plugin v0.4.2`, `pkg/model v0.1.28`,
+  `pkg/plugin-conformance-tests v0.2.7`.
+- The `SecretKey` conformance fixtures declare bare strings on what is now an
+  opaque field: v0.2.7 verifies the stored SHA-256 digest against the authored
+  plaintext, where v0.2.6 compared the two literally and failed.
 
 ### Added
 
@@ -87,9 +118,10 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   records only the user can publish, so `status` can stay `pending_validation`
   indefinitely; the records are surfaced in the `dnsRequirements` output.
 - **`Secrets.values` is write-only.** Value drift cannot be detected — only an
-  added or removed name. The plugin never asks Fly to reveal values. Per-entry
-  opacity is available via `formae.value(x).opaque`; a field-level `opaque` hint
-  is not expressible for a map-valued field on formae 0.89.0.
+  added or removed name. The plugin never asks Fly to reveal values, which is
+  also why no Fly resource is a `formae.Secret`. Per-entry opacity is available
+  via `formae.value(x).opaque`; a field-level `opaque` hint is not expressible
+  for a map-valued field on formae 0.89.0.
 - **`SecretKey.keyType` is required and immutable.** The OpenAPI spec marks it
   optional; omitting it answers 400 and lists the accepted set (`hs256`,
   `hs384`, `hs512`, `xaes256gcm`, `nacl_auth`, `nacl_box`, `nacl_secretbox`,

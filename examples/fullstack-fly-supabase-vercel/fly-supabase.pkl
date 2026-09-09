@@ -22,7 +22,6 @@
  *   export FLY_ORG=<fly org slug, or "personal">
  *   export SUPABASE_ACCESS_TOKEN=sbp_...
  *   export SUPABASE_ORGANIZATION_ID=<org id>
- *   export SUPABASE_DB_PASS=<postgres password, >= 8 chars>
  *   export APP_SLUG=<globally-unique name>
  *
  *   formae apply --mode reconcile --yes examples/fullstack-fly-supabase-vercel/fly-supabase.pkl
@@ -43,18 +42,25 @@ local flyRegion = read?("env:FLY_REGION_OVERRIDE") ?? "fra"
 local supabaseRegion = read?("env:SUPABASE_REGION") ?? "eu-central-1"
 local apiImage = read?("env:API_IMAGE") ?? "flyio/hellofly:latest"
 
-// Read from the environment, not generated: the same value has to reach both
-// Supabase's dbPass and the Fly secret the backend reads, and `setOnce` is
-// scoped per resource field — two setOnce expressions would generate two
-// different passwords. `.opaque` still applies at both ends.
-local dbPassword = read("env:SUPABASE_DB_PASS")
+// Drawn by formae, not read from the environment: one generator is one value
+// with two destinations — Supabase's dbPass and the Fly secret the backend
+// reads — so they are provably equal. `setOnce` is scoped per resource field
+// and would have minted two different passwords. No cadence, and deliberately
+// none: Supabase's dbPass is createOnly, so a rotating generator bound here
+// would replace the project. The value is drawn once and never changes.
+local dbPassGen = new formae.PasswordGenerator {
+  label = "db-password"
+  stack = appStack.res
+  length = 32
+  symbols = false   // Supabase needs >= 8 chars; the backend puts this in a DSN
+}
 
 local db = new supabase.Project {
   label = "app-database"
   name = "\(appSlug)-db"
   organizationId = supabaseOrg
   region = supabaseRegion
-  dbPass = formae.value(dbPassword).opaque
+  dbPass = dbPassGen.gen.value
   plan = "free"
 }
 
@@ -77,16 +83,23 @@ local apiSecrets = new fly.Secrets {
   label = "api-secrets"
   appName = api.res.name
   values {
-    ["SUPABASE_DB_PASSWORD"] = formae.value(dbPassword).opaque
-    ["SUPABASE_SECRET_KEY"] = secretKey.res.apiKey
+    ["SUPABASE_DB_PASSWORD"] = dbPassGen.gen.value
+    ["SUPABASE_SECRET_KEY"] = secretKey.res.secretValue
   }
 }
 
+// Bound as a local because the password generator has to name its stack.
+local appStack = new formae.Stack {
+  label = "fly-supabase"
+  description = "Supabase Postgres and a Fly.io API, wired together"
+}
+
 forma {
-  new formae.Stack {
-    label = "fly-supabase"
-    description = "Supabase Postgres and a Fly.io API, wired together"
-  }
+  appStack
+
+  // The generator is a forma member in its own right: formae draws its value
+  // and delivers it to every property bound to it.
+  dbPassGen
 
   new formae.Target {
     label = "fly"
