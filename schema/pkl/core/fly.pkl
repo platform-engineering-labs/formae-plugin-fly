@@ -8,8 +8,10 @@
 ///
 /// Every type here maps to the Fly.io Machines REST API
 /// (https://api.machines.dev, OpenAPI at https://docs.machines.dev/spec/openapi3.json).
-/// Only resources the plugin actually implements appear in this module — see
-/// docs/RESOURCES.md for the full catalog and what is coming next.
+/// Only resources the plugin actually implements appear in this module. What is
+/// missing is GraphQL-only (organizations, WireGuard peers, egress IPs, Upstash
+/// Redis, Tigris buckets, tokens) or a runtime verb rather than declarative
+/// state.
 module fly
 
 import "@formae/formae.pkl"
@@ -310,8 +312,7 @@ class Machine extends formae.Resource {
     /// `services[].autostop`/`autostart` are set, so treating this field as
     /// desired state would read an autostopped machine as drift, start it, get
     /// it autostopped again — an infinite reconcile loop that also bills for
-    /// every wake-up. Use `fly machine start|stop` for runtime control. See
-    /// docs/ARCHITECTURE.md.
+    /// every wake-up. Use `fly machine start|stop` for runtime control.
     @formae.FieldHint { hasProviderDefault = true }
     state: String?
 

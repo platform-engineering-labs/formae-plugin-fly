@@ -14,9 +14,9 @@ Requires formae **0.89.0** or newer — the schema uses `formae.ValueSource`, th
 ## Supported Resources
 
 This plugin supports **14 Fly.io resource types** across 2 services. See
-[`schema/pkl/`](schema/pkl/) for field definitions and
-[`docs/RESOURCES.md`](docs/RESOURCES.md) for the full API catalog, including
-what is not yet implemented and why.
+[`schema/pkl/`](schema/pkl/) for field definitions — every class carries the API
+behaviour it was written against, including what is deliberately not
+implemented.
 
 | Resource Type | Description |
 |---------------|-------------|
@@ -241,8 +241,8 @@ the agent accepts the command. Machine creates, and Managed Postgres creates in
 particular, are asynchronous — follow them with `formae command status`.
 
 Contributor setup, conformance testing and publishing are in
-[CONTRIBUTING.md](CONTRIBUTING.md). Design decisions and the API research behind
-them are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[CONTRIBUTING.md](CONTRIBUTING.md). Design decisions live next to the code they
+explain, in `schema/pkl/core/fly.pkl` and the provisioners under `pkg/`.
 
 ## License
 

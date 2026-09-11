@@ -109,13 +109,13 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   Not conformance-tested, deliberately: `Certificate` never converges without
   DNS records on a domain the suite controls, and `VolumeSnapshot` /
   `Postgres::Backup` have no delete endpoint, so every run would leak an
-  artifact. Reasoning in docs/RESOURCES.md.
+  artifact. Reasoning is on the resource classes in `schema/pkl/core/fly.pkl`.
 - `examples/basic/` — one publicly reachable Fly app.
 - `examples/fullstack-fly-supabase-vercel/` — a three-tier application across
   Fly, Supabase and Vercel wired with cross-plugin resolvables, plus a
   two-provider variant.
-- `docs/RESOURCES.md` and `docs/ARCHITECTURE.md` — the API catalog, the counts
-  behind it, and the design decisions.
+- Design notes on every resource class in `schema/pkl/core/fly.pkl`, covering
+  the API behaviour each one was written against.
 
 ### Notes and known limitations
 
@@ -172,4 +172,4 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   private 6PN address is indistinguishable from a public IPv6 one — it would
   drift forever. `shared_v4`, `v4` and `v6` all round-trip.
 - Managed Postgres — 22 REST operations — is the largest unimplemented area and
-  the obvious next step. See `docs/RESOURCES.md`.
+  the obvious next step.
