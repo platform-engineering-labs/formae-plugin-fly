@@ -67,22 +67,25 @@ First release. Requires formae 0.89.0 or newer.
 Fourteen resource types, all on the Fly.io Machines REST API
 (`api.machines.dev`) — the declarative REST surface in full:
 
+Every type implements `Status` and `List` as well as the CRUD below, so all
+fourteen take part in discovery.
+
 | Resource | Operations |
 |----------|-----------|
-| `FLY::Apps::App` | Create, Read, Delete, List |
-| `FLY::Apps::Machine` | Create, Read, Update, Delete, Status, List |
-| `FLY::Apps::Volume` | Create, Read, Update, Delete, List |
-| `FLY::Apps::Secrets` | Create, Read, Update, Delete, List |
-| `FLY::Apps::Certificate` | Create, Read, Delete, List |
-| `FLY::Apps::IPAddress` | Create, Read, Delete, List |
-| `FLY::Apps::VolumeSnapshot` | Create, Read, Delete\*, List |
-| `FLY::Apps::SecretKey` | Create, Read, Update, Delete, List |
-| `FLY::Postgres::Cluster` | Create, Read, Delete, Status, List |
-| `FLY::Postgres::Database` | Create, Read, Delete, List |
-| `FLY::Postgres::User` | Create, Read, Update, Delete, List |
-| `FLY::Postgres::Attachment` | Create, Read, Delete, List |
-| `FLY::Postgres::Extension` | Create, Read, Delete, List |
-| `FLY::Postgres::Backup` | Create, Read, Delete\*, List |
+| `FLY::Apps::App` | Create, Read, Delete |
+| `FLY::Apps::Machine` | Create, Read, Update, Delete |
+| `FLY::Apps::Volume` | Create, Read, Update, Delete |
+| `FLY::Apps::Secrets` | Create, Read, Update, Delete |
+| `FLY::Apps::Certificate` | Create, Read, Delete |
+| `FLY::Apps::IPAddress` | Create, Read, Delete |
+| `FLY::Apps::VolumeSnapshot` | Create, Read, Delete\* |
+| `FLY::Apps::SecretKey` | Create, Read, Update, Delete |
+| `FLY::Postgres::Cluster` | Create, Read, Delete |
+| `FLY::Postgres::Database` | Create, Read, Delete |
+| `FLY::Postgres::User` | Create, Read, Update, Delete |
+| `FLY::Postgres::Attachment` | Create, Read, Delete |
+| `FLY::Postgres::Extension` | Create, Read, Delete |
+| `FLY::Postgres::Backup` | Create, Read, Delete\* |
 
 \* Fly exposes no delete endpoint for volume snapshots or Postgres backups.
 Delete reports success and says so; the artifact expires under its retention
@@ -109,13 +112,13 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   Not conformance-tested, deliberately: `Certificate` never converges without
   DNS records on a domain the suite controls, and `VolumeSnapshot` /
   `Postgres::Backup` have no delete endpoint, so every run would leak an
-  artifact. Reasoning in docs/RESOURCES.md.
+  artifact. Reasoning is on the resource classes in `schema/pkl/core/fly.pkl`.
 - `examples/basic/` — one publicly reachable Fly app.
 - `examples/fullstack-fly-supabase-vercel/` — a three-tier application across
   Fly, Supabase and Vercel wired with cross-plugin resolvables, plus a
   two-provider variant.
-- `docs/RESOURCES.md` and `docs/ARCHITECTURE.md` — the API catalog, the counts
-  behind it, and the design decisions.
+- Design notes on every resource class in `schema/pkl/core/fly.pkl`, covering
+  the API behaviour each one was written against.
 
 ### Notes and known limitations
 
@@ -172,4 +175,4 @@ for any of them, so every field is `createOnly` and a change is a replacement.
   private 6PN address is indistinguishable from a public IPv6 one — it would
   drift forever. `shared_v4`, `v4` and `v6` all round-trip.
 - Managed Postgres — 22 REST operations — is the largest unimplemented area and
-  the obvious next step. See `docs/RESOURCES.md`.
+  the obvious next step.

@@ -12,7 +12,8 @@
 //
 // One transport covers every resource this plugin implements — apps, machines,
 // volumes, secrets, certificates and IP assignments are all REST endpoints on
-// this host. See docs/ARCHITECTURE.md for why there is no GraphQL client.
+// this host. There is no GraphQL client: every resource this plugin implements
+// is on the REST surface.
 package fly
 
 import (

@@ -104,12 +104,25 @@ clusters are org-scoped and are swept separately.
 
 ### Adding a resource
 
-The full workflow is at the end of [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-The short version: read the operation out of
-`https://docs.machines.dev/spec/openapi3.json` rather than from a Terraform
-provider or from memory, write the failing unit test first, and register only
-the operations the API actually supports — a registered operation that the
-provisioner refuses is worse than an unregistered one.
+1. Read the operation out of `https://docs.machines.dev/spec/openapi3.json` —
+   not from a Terraform provider, and not from memory. The spec is what the API
+   does.
+2. Add the class to `schema/pkl/core/fly.pkl`: `@formae.ResourceHint` with
+   `type` and `identifier` (a JSONPath into the `Read` output), `createOnly` on
+   anything the API has no update path for, `writeOnly` on anything the API
+   never echoes back. If it hangs off an app, add an
+   `appName: String|formae.Resolvable` field and a `Resolvable` subclass so
+   other resources can reference its outputs.
+3. Write the failing unit test first (`//go:build unit`), against an
+   `httptest.Server`.
+4. Implement `prov.Provisioner` in `pkg/resources/apps/<name>.go`, and
+   `init()`-register it with the operations it genuinely supports — a registered
+   operation that the provisioner refuses is worse than an unregistered one.
+5. Add `testdata/<name>.pkl` and `-update.pkl` (plus `-replace.pkl` if it has
+   `createOnly` fields), and extend `scripts/ci/clean-environment.sh` if the
+   resource can leak outside an app.
+6. `make lint && make test-unit && make install && make conformance-test TEST=<name>`.
+   Conformance runs the **installed** binary — `make install` is not optional.
 
 Be warned that the spec is wrong in places. Cases found by testing against the
 live API, all documented where they bite: `POST /v1/apps` returns

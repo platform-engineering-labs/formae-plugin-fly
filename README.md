@@ -14,31 +14,42 @@ Requires formae **0.89.0** or newer — the schema uses `formae.ValueSource`, th
 ## Supported Resources
 
 This plugin supports **14 Fly.io resource types** across 2 services. See
-[`schema/pkl/`](schema/pkl/) for field definitions and
-[`docs/RESOURCES.md`](docs/RESOURCES.md) for the full API catalog, including
-what is not yet implemented and why.
+[`schema/pkl/`](schema/pkl/) for field definitions — every class carries the API
+behaviour it was written against, including what is deliberately not
+implemented.
 
-| Resource Type | Description |
-|---------------|-------------|
-| `FLY::Apps::App` | Fly app — the namespace every other resource lives in. Free until a machine runs |
-| `FLY::Apps::Machine` | One Firecracker VM running one container image. **Bills per second while running** |
-| `FLY::Apps::Volume` | Persistent volume attached to at most one machine |
-| `FLY::Apps::VolumeSnapshot` | Point-in-time snapshot of a volume |
-| `FLY::Apps::Secrets` | All of an app's secrets as one resource, injected into machines at boot |
-| `FLY::Apps::SecretKey` | App-scoped KMS key material for the encrypt / sign endpoints |
-| `FLY::Apps::Certificate` | ACME certificate for a custom hostname |
-| `FLY::Apps::IPAddress` | IP address assigned to an app. Required for the app to be reachable |
-| `FLY::Postgres::Cluster` | Managed Postgres cluster. **A real always-on database, no free tier** |
-| `FLY::Postgres::Database` | Database inside a Managed Postgres cluster |
-| `FLY::Postgres::User` | Role inside a cluster. `role` is the only mutable field |
-| `FLY::Postgres::Attachment` | Attaches a Fly app to a cluster, injecting a `DATABASE_URL` secret |
-| `FLY::Postgres::Extension` | Postgres extension enabled in one database |
-| `FLY::Postgres::Backup` | Backup of a Managed Postgres cluster |
+| Resource Type | Ops | Description |
+|---------------|-----|-------------|
+| `FLY::Apps::App` | CR_D | Fly app — the namespace every other resource lives in. Free until a machine runs |
+| `FLY::Apps::Machine` | CRUD | One Firecracker VM running one container image. **Bills per second while running** |
+| `FLY::Apps::Volume` | CRUD | Persistent volume attached to at most one machine |
+| `FLY::Apps::VolumeSnapshot` | CR_d | Point-in-time snapshot of a volume |
+| `FLY::Apps::Secrets` | CRUD | All of an app's secrets as one resource, injected into machines at boot. A `formae.Secret`: an entry is readable as `bag.res.secretValue.at("KEY")` |
+| `FLY::Apps::SecretKey` | CRUD | App-scoped KMS key material for the encrypt / sign endpoints |
+| `FLY::Apps::Certificate` | CR_D | ACME certificate for a custom hostname |
+| `FLY::Apps::IPAddress` | CR_D | IP address assigned to an app. Required for the app to be reachable |
+| `FLY::Postgres::Cluster` | CR_D | Managed Postgres cluster. **A real always-on database, no free tier** |
+| `FLY::Postgres::Database` | CR_D | Database inside a Managed Postgres cluster |
+| `FLY::Postgres::User` | CRUD | Role inside a cluster. `role` is the only mutable field |
+| `FLY::Postgres::Attachment` | CR_D | Attaches a Fly app to a cluster, injecting a `DATABASE_URL` secret |
+| `FLY::Postgres::Extension` | CR_D | Postgres extension enabled in one database |
+| `FLY::Postgres::Backup` | CR_d | Backup of a Managed Postgres cluster |
+
+**Ops** is Create / Read / Update / Delete. Every type additionally implements
+`Status` and `List`, so all fourteen take part in discovery.
+
+- `_` — **no Update.** The API has no update endpoint for that resource, so
+  changing a field replaces the resource rather than mutating it. Each schema
+  class says which endpoint is missing.
+- `d` — **Delete is a no-op that reports success.** Fly exposes no delete for
+  volume snapshots or Postgres backups; both expire under a retention policy.
 
 Everything is the Machines REST API on one transport — no GraphQL client. That
 is the declarative REST surface exhausted; what remains (organizations,
 WireGuard peers, egress IPs, Upstash Redis, Tigris buckets, tokens) is
-GraphQL-only.
+GraphQL-only. The runtime verbs (`start`, `stop`, `restart`, `suspend`, `exec`,
+`signal`, `lease`, `wait`) are REST and deliberately unimplemented: they are
+operations to perform on a resource, not state to declare.
 
 ### Notes
 
@@ -99,8 +110,10 @@ target: formae.Target = new formae.Target {
 
 `org` is required: listing apps (`GET /v1/apps?org_slug=`) and org-wide volume
 discovery both need it, and it cannot be derived from a token. Machine discovery
-goes through the app list too — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-for why it does not use Fly's org-wide machine index.
+goes through that app list too, one call per app. Fly's org-wide machine index
+is not used: Fly documents it as "a point in time" where "recent machine
+changes, including creations and destructions, may take time to propagate", and
+in practice a machine created seconds ago is missing from it for minutes.
 
 `region` is a default so a forma need not repeat it on every machine and volume;
 a resource-level `region` wins. The authoritative region list is public and
@@ -241,8 +254,8 @@ the agent accepts the command. Machine creates, and Managed Postgres creates in
 particular, are asynchronous — follow them with `formae command status`.
 
 Contributor setup, conformance testing and publishing are in
-[CONTRIBUTING.md](CONTRIBUTING.md). Design decisions and the API research behind
-them are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[CONTRIBUTING.md](CONTRIBUTING.md). Design decisions live next to the code they
+explain, in `schema/pkl/core/fly.pkl` and the provisioners under `pkg/`.
 
 ## License
 

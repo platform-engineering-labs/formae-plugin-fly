@@ -1,15 +1,5 @@
 name: CI
 
-# scripts/ci/clean-environment.sh deletes every app and Postgres cluster
-# matching the formae-sdk-test- prefix in FLY_ORG, before AND after each test.
-# Two conformance runs in the same org therefore destroy each other's in-flight
-# resources — a push landing while an earlier run is mid-test would fail both.
-# Queue them instead of cancelling, so a run that has already created a Postgres
-# cluster is never killed before its cleanup step.
-concurrency:
-  group: fly-conformance-tests
-  cancel-in-progress: false
-
 on:
   push:
     branches: [main]
@@ -148,6 +138,25 @@ jobs:
     needs: [build, lint, pkl-validate, verify-schema]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
+    # scripts/ci/clean-environment.sh deletes every app and Postgres cluster
+    # matching the formae-sdk-test- prefix in FLY_ORG, before AND after each
+    # test. Two conformance runs in the same org therefore destroy each other's
+    # in-flight resources — a push landing while an earlier run is mid-test
+    # would fail both. Queue them instead of cancelling, so a run that has
+    # already created a Postgres cluster is never killed before its cleanup
+    # step.
+    #
+    # Scoped to this job and not to the workflow, which matters: a
+    # workflow-level group serialises build, lint and the schema checks too,
+    # and because only one run may sit pending per group, a second pull
+    # request's whole run is cancelled while the first one's conformance is
+    # still going. Every dependabot PR on this repo has been cancelled that
+    # way. Fast checks now run in parallel across branches; only the billable
+    # job queues.
+    concurrency:
+      group: fly-conformance-tests
+      cancel-in-progress: false
 
     strategy:
       fail-fast: false
