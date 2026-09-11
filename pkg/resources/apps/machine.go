@@ -459,42 +459,55 @@ func (m *Machine) Status(ctx context.Context, req *resource.StatusRequest) (*res
 	}
 }
 
-// List enumerates machines org-wide in one call. The per-app endpoint would
-// need one request per app, which on a large org is what times discovery out.
-func (m *Machine) List(ctx context.Context, req *resource.ListRequest) (*resource.ListResult, error) {
-	empty := &resource.ListResult{NativeIDs: []string{}}
+// List fans out over the org's apps: one call to enumerate them, then one per
+// app for its machines.
+//
+// The obvious alternative, GET /v1/orgs/{org}/machines, is one request instead
+// of N and is what this used to do. It does not work for discovery. Fly
+// documents that endpoint as representing "a point in time" where "recent
+// machine changes, including creations and destructions, may take time to
+// propagate" — and in practice a machine created seconds earlier is absent from
+// it for minutes. Conformance discovery caught this as a hard failure: every run
+// polled for two minutes and saw zero machines, while Read against the per-app
+// endpoint answered for the same machine immediately.
+//
+// So the cost is real and accepted: N+1 requests, slow on a large org, and the
+// first thing to revisit if discovery times out — the same trade Secrets.List
+// makes for the same reason. Correctness first; the org index cannot be trusted
+// to contain a machine that exists.
+//
+// Pagination goes with it: the per-app endpoint returns a plain array with no
+// cursor, so there is no page token to hand back.
+func (m *Machine) List(ctx context.Context, _ *resource.ListRequest) (*resource.ListResult, error) {
+	ids := make([]string, 0)
 	if m.Target == nil || m.Target.Org == "" {
-		return empty, nil
+		return &resource.ListResult{NativeIDs: ids}, nil
 	}
-	query := map[string]string{"summary": "true"} // discovery only needs ids
-	if req != nil && req.PageToken != nil && *req.PageToken != "" {
-		query["cursor"] = *req.PageToken
-	}
-	var resp struct {
-		Machines []struct {
-			ID      string `json:"id"`
-			AppName string `json:"app_name"`
-		} `json:"machines"`
-		NextCursor string `json:"next_cursor"`
-	}
-	if err := m.Client.Do(ctx, flytransport.Request{
-		Method: "GET", Path: "/v1/orgs/" + m.Target.Org + "/machines", Query: query,
-	}, &resp); err != nil {
+	apps, err := listAppNames(ctx, m.Client, m.Target)
+	if err != nil {
 		// One unreadable org must not fail the whole discovery sync.
-		return empty, nil
+		return &resource.ListResult{NativeIDs: ids}, nil
 	}
-	ids := make([]string, 0, len(resp.Machines))
-	for _, mc := range resp.Machines {
-		if mc.ID == "" || mc.AppName == "" {
+	for _, app := range apps {
+		var machines []struct {
+			ID string `json:"id"`
+		}
+		if err := m.Client.Do(ctx, flytransport.Request{
+			Method: "GET", Path: "/v1/apps/" + app + "/machines",
+			Query: map[string]string{"summary": "true"}, // discovery only needs ids
+		}, &machines); err != nil {
+			// An app the token cannot read, or one deleted mid-scan, must not
+			// blank the rest of the org.
 			continue
 		}
-		ids = append(ids, prov.JoinTwoPart(mc.AppName, mc.ID))
+		for _, mc := range machines {
+			if mc.ID == "" {
+				continue
+			}
+			ids = append(ids, prov.JoinTwoPart(app, mc.ID))
+		}
 	}
-	out := &resource.ListResult{NativeIDs: ids}
-	if resp.NextCursor != "" {
-		out.NextPageToken = &resp.NextCursor
-	}
-	return out, nil
+	return &resource.ListResult{NativeIDs: ids}, nil
 }
 
 // region resolves the effective region: the resource's own, else the target's

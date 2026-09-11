@@ -28,9 +28,11 @@ open class Config {
 
     /// Fly organization slug — the real one, not the "personal" alias
     /// (see FLY::Apps::App.org). Required: listing apps
-    /// (GET /v1/apps?org_slug=) and org-wide machine/volume discovery
-    /// (GET /v1/orgs/{slug}/machines) both need it, and it cannot be derived
-    /// from a token.
+    /// (GET /v1/apps?org_slug=) and org-wide volume discovery
+    /// (GET /v1/orgs/{slug}/volumes) both need it, and it cannot be derived
+    /// from a token. Machine discovery reaches machines through that same app
+    /// list: Fly's org-wide machine index lags behind recent creations by
+    /// minutes, so it cannot be trusted to contain a machine that exists.
     org: String
 
     /// Default Fly region code for Machines and Volumes that do not name one
