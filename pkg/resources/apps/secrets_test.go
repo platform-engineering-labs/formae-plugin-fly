@@ -8,6 +8,7 @@ package apps
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -71,10 +72,13 @@ func TestSecretsCreateRequiresAppAndValues(t *testing.T) {
 
 // Read must never reveal values: show_secrets is not requested and the
 // properties carry only the app name.
-func TestSecretsReadOmitsValues(t *testing.T) {
+// Read reveals the bag so `secrets.res.secretValue.at("KEY")` can resolve. The
+// values land on decodedValues, never on values: values is what the author
+// writes, and echoing it back would make an authored bag look like read state.
+func TestSecretsReadRevealsDecodedValues(t *testing.T) {
 	sec, s := newSecrets(t, map[string]route{
 		"GET /v1/apps/my-api/secrets": {200, `{"secrets":[
-			{"name":"DATABASE_URL","digest":"abc","created_at":"2026-01-01T00:00:00Z"}]}`},
+			{"name":"DATABASE_URL","digest":"abc","value":"postgres://x","created_at":"2026-01-01T00:00:00Z"}]}`},
 	})
 	res, err := sec.Read(context.Background(), &resource.ReadRequest{
 		ResourceType: ResourceTypeSecrets, NativeID: "my-api/secrets",
@@ -90,10 +94,62 @@ func TestSecretsReadOmitsValues(t *testing.T) {
 		t.Errorf("appName = %v", props["appName"])
 	}
 	if _, ok := props["values"]; ok {
-		t.Error("Read leaked values into properties")
+		t.Error("Read echoed the authored values field")
 	}
-	if q := s.only().Query; q != "" {
-		t.Errorf("query = %q; show_secrets must never be sent", q)
+	decoded, ok := props["decodedValues"].(map[string]any)
+	if !ok {
+		t.Fatalf("decodedValues = %+v", props["decodedValues"])
+	}
+	if decoded["DATABASE_URL"] != "postgres://x" {
+		t.Errorf("decodedValues = %+v", decoded)
+	}
+	if q := s.only().Query; q != "show_secrets=true" {
+		t.Errorf("query = %q, want show_secrets=true", q)
+	}
+}
+
+// A token that may list secrets but not reveal them must keep working: the bag
+// is still read, just without the values. Only the reference accessor is lost.
+func TestSecretsReadFallsBackToNamesWhenRevealDenied(t *testing.T) {
+	sec, s := newSecrets(t, nil)
+	s.handler = func(_, query string) (int, string, bool) {
+		if query == "show_secrets=true" {
+			return 403, `{"error":"insufficient scope"}`, true
+		}
+		return 200, `{"secrets":[{"name":"DATABASE_URL","digest":"abc"}]}`, true
+	}
+	res, err := sec.Read(context.Background(), &resource.ReadRequest{
+		ResourceType: ResourceTypeSecrets, NativeID: "my-api/secrets",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if res.ErrorCode != "" {
+		t.Fatalf("ErrorCode = %q, want a successful read without values", res.ErrorCode)
+	}
+	props := decodeProps(t, res.Properties)
+	if props["appName"] != "my-api" {
+		t.Errorf("appName = %v", props["appName"])
+	}
+	if _, ok := props["decodedValues"]; ok {
+		t.Error("decodedValues present after a denied reveal")
+	}
+	if len(s.calls) != 2 {
+		t.Errorf("calls = %d, want the denied reveal plus the names-only retry", len(s.calls))
+	}
+}
+
+// 403 on the reveal is a scope problem; 401 is a broken token and must not be
+// papered over as a successful read.
+func TestSecretsReadPropagatesNonPermissionErrors(t *testing.T) {
+	sec, _ := newSecrets(t, map[string]route{
+		"GET /v1/apps/my-api/secrets": {401, `{"error":"unauthorized"}`},
+	})
+	res, _ := sec.Read(context.Background(), &resource.ReadRequest{
+		ResourceType: ResourceTypeSecrets, NativeID: "my-api/secrets",
+	})
+	if res.ErrorCode != resource.OperationErrorCodeInvalidCredentials {
+		t.Errorf("ErrorCode = %q, want InvalidCredentials", res.ErrorCode)
 	}
 }
 
@@ -225,5 +281,12 @@ func TestSecretsListFansOutAndSkipsEmptyApps(t *testing.T) {
 	}
 	if len(s.calls) != 4 {
 		t.Errorf("calls = %d, want 1 app list + 3 secret lists", len(s.calls))
+	}
+	// Discovery walks every app in the org. Revealing here would pull the whole
+	// org's plaintext through the agent for resources nobody asked to manage.
+	for _, c := range s.calls {
+		if strings.HasSuffix(c.Path, "/secrets") && c.Query != "" {
+			t.Errorf("%s %s carried query %q; discovery must never reveal", c.Method, c.Path, c.Query)
+		}
 	}
 }

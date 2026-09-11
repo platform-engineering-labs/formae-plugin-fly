@@ -291,12 +291,53 @@ formae 0.89.0 — setting `opaque = true` in the FieldHint is silently discarded
 by inspecting the rendered `Schema.Hints`).
 
 Opacity is available per entry instead. The field is typed
-`Mapping<String, (String|formae.Value)>`, so a sensitive entry can be written
+`Mapping<String, (String|formae.ValueSource)>`, so a sensitive entry can be written
 `formae.value(x).opaque`, which renders as `{"$value": …, "$visibility": "Opaque"}` and is
 hashed at rest by the agent; the plugin still receives a plain string. Plain-string
 entries are stored as written. The README and the examples use `formae.value(…).opaque`
 for anything that is actually a secret, and that is the guidance to follow until the SDK
 can express opacity on a map field.
+
+`FLY::Apps::SecretKey.value` is a scalar, so it takes the other route: naming
+`formae.ValueSource` puts `formae.SecretValue` in the union, `isSecretValueType` sees it,
+and the rendered hint carries `Opaque = true` (verified — `hints(SecretKey)["value"].Opaque`
+is `true` while `hints(Secrets)["values"].Opaque` is `false`). The agent then hashes the
+value at rest whatever form the author supplied, so `.opaque` on that field is redundant.
+conformance-tests v0.2.7 compares the stored SHA-256 digest against the authored
+plaintext, which is why the fixtures can declare a bare string on an opaque field — under
+v0.2.6 that comparison was literal and an opaque value failed it.
+
+Naming `formae.ValueSource` on both fields also widens them to `formae.GeneratorOutput`,
+which is what lets a Fly secret bind to a `PasswordGenerator` or `KeyPairGenerator`, and
+to a `SecretValueResolvable`, which is what lets it take another provider's secret.
+
+### The bag as a secret source
+
+`FLY::Apps::Secrets` extends `formae.Secret`, so Fly is a source as well as a
+destination. Three decisions make that safe enough to be worth it:
+
+**A separate read field.** The value property is `decodedValues`, not `values`. `values`
+is what the author writes and is still never echoed back, so value drift stays
+undetectable and an authored bag never looks like read state. `decodedValues` is
+`writeOnly` and `hasProviderDefault` — the K8S plugin's `Secret.decodedData` shape — so it
+exists to resolve references and nothing else. Verified on the rendered hints:
+`Opaque`, `WriteOnly` and `HasProviderDefault` are all `true`, and
+`bag.res.secretValue.at("DATABASE_URL")` resolves to the property path
+`decodedValues.DATABASE_URL`.
+
+**Reveal only on Read.** `List` walks every app in the org during discovery. Revealing
+there would pull the whole org's plaintext through the agent for resources nobody asked to
+manage, so `list(ctx, app, reveal)` takes the flag and only `Read` passes `true`.
+
+**A denied reveal is not a failed read.** A token may be allowed to list secrets and not
+to reveal them. `Read` retries without `show_secrets` on `AccessDenied` and reports the
+bag without values; only the `secretValue` accessor is lost. Refusing to read at all would
+break sync for every read-only token that works today. `401` is not treated this way — a
+broken token must surface as one.
+
+What this buys, beyond uniformity with the other plugins: entries Fly writes itself become
+referenceable. `FLY::Postgres::Attachment` injects a `DATABASE_URL` that formae never
+authored and, before this, could not reach at all.
 - The error body's message field is `message` on some upstreams and `error` on others
   (§ Transport). The decoder probes `message`, `error`, `msg` in that order.
 

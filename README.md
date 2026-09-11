@@ -8,7 +8,8 @@ enables Formae to manage Fly.io resources using the [Machines REST
 API](https://docs.machines.dev/) — apps, machines, volumes, secrets,
 certificates, IP addresses and Managed Postgres.
 
-Requires formae **0.84.0** or newer.
+Requires formae **0.89.0** or newer — the schema uses `formae.ValueSource`, the
+0.89.0 secret/generator binding type.
 
 ## Supported Resources
 
@@ -61,9 +62,19 @@ Behaviour that will surprise you otherwise:
 - **`VolumeSnapshot` and `Postgres::Backup` cannot be deleted.** Fly exposes no
   delete endpoint; both expire under a retention policy. Their delete reports
   success and says so.
-- **`Secrets.values` is write-only.** Value drift cannot be detected, only an
-  added or removed name. Wrap sensitive entries in `formae.value(x).opaque` to
-  have them hashed at rest.
+- **`Secrets.values` is write-only.** It is never echoed back, so value drift is
+  still not detected — only an added or removed name. Wrap sensitive entries in
+  `formae.value(x).opaque` to have them hashed at rest: opacity is per entry
+  here, because formae derives it from a field's declared type and does not
+  descend into map value positions. `SecretKey.value` and the bag's read-only
+  `decodedValues` are typed opaque and hashed at rest whatever you write.
+- **`FLY::Apps::Secrets` is a `formae.Secret`.** Read reveals the bag
+  (`GET /v1/apps/{app}/secrets?show_secrets=true`) onto a read-only
+  `decodedValues` field, so an entry is referenceable as
+  `bag.res.secretValue.at("KEY")` — including the `DATABASE_URL` a Postgres
+  attachment injects, which formae never wrote. Reveal happens on **Read only**;
+  discovery lists names. A token that may list but not reveal still reads the
+  bag, just without the values.
 
 ## Configuration
 
@@ -131,6 +142,79 @@ agent, often in a container with no `$HOME/.fly`.
 curl -s -H "Authorization: Bearer $FLY_API_TOKEN" \
   https://api.machines.dev/v1/tokens/current | jq
 ```
+
+### Secrets
+
+`FLY::Apps::Secrets` entries and `FLY::Apps::SecretKey.value` take
+`formae.ValueSource`, so a credential need never be written into a forma. (On
+`SecretKey.value` a generator draw type-checks but will not be valid key
+material — Fly wants base64 sized for the `keyType`. Omit the field and let Fly
+generate the key.)
+
+Let formae draw it. Without a `rotation` the value is drawn once and never
+changes — the replacement for minting a password at eval time and pinning it
+with `setOnce`. With one, formae rotates on the cadence and moves every
+destination bound to the generator together:
+
+```pkl
+local sessionPw = new formae.PasswordGenerator {
+  label = "api-session-secret"
+  stack = appStack.res
+  rotation = new formae.RotationSpec { every = 30.d }
+}
+
+local apiSecrets = new fly.Secrets {
+  label = "api-secrets"
+  appName = api.res.name
+  values {
+    ["SESSION_SECRET"] = sessionPw.gen.value
+  }
+}
+```
+
+Fly reads secrets back, too. `FLY::Apps::Secrets` is a `formae.Secret` whose
+value is the bag, so an entry is reachable by key — including one Fly wrote
+itself:
+
+```pkl
+local pg = new fly.Attachment {
+  label = "api-db"
+  clusterId = cluster.res.id
+  appName = api.res.name          // Fly injects DATABASE_URL into this app
+}
+
+local apiSecrets = new fly.Secrets {
+  label = "api-secrets"
+  appName = api.res.name
+  values { ["SESSION_SECRET"] = sessionPw.gen.value }
+}
+
+// Somewhere else entirely — another plugin, another stack:
+//   dsn = apiSecrets.res.secretValue.at("DATABASE_URL")
+```
+
+The bag does not declare `DATABASE_URL`, and must not: Fly owns that key and the
+two would fight over it. Reading it back is fine — `values` is the write side,
+`decodedValues` the read side, and they are separate fields.
+
+`secretValue` on a map-shaped secret is an accessor, not a value: `.at(key)` is
+required and a bare `secretValue` will not type-check.
+
+Or hand Fly a secret another provider holds. It is read live on every plugin
+call, so rotating it upstream takes effect without re-applying here:
+
+```pkl
+values {
+  ["DB_PASSWORD"] = dbSecret.res.secretValue          // scalar secret
+  ["API_KEY"]     = vaultSecret.res.secretValue.at("api-key")  // map-shaped
+  ["TOKEN"]       = appSecret.res.secretValue.json("creds.token")
+}
+```
+
+A reference is a handle, not a string: pass it whole, never interpolated.
+
+Rotation inherits the Fly caveat noted above: a running machine does not pick up
+the new value until it restarts, and formae will not restart it for you.
 
 ## Examples
 

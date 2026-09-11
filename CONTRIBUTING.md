@@ -70,7 +70,7 @@ make conformance-test                        # everything, CRUD + discovery
 make conformance-test TEST=app               # one case
 make conformance-test TEST=app,secrets       # several (comma-separated, not a regex)
 make conformance-test TEST=postgres TIMEOUT=30
-make conformance-test VERSION=0.88.1         # pin the agent version
+make conformance-test VERSION=0.89.0         # pin the agent version
 ```
 
 `TIMEOUT` is in **minutes**. The Makefile appends the `m` for `go test -timeout`

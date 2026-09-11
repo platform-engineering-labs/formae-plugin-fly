@@ -421,9 +421,19 @@ class Volume extends formae.Resource {
 // =============================================================================
 
 /// Resolvable handle for `FLY::Apps::Secrets` outputs. Reference it to force a
-/// Machine to be created after its secrets exist.
-open class SecretsResolvable extends formae.Resolvable {
+/// Machine to be created after its secrets exist, or to read one of the bag's
+/// values back out.
+///
+/// The bag is map-shaped, so `secretValue` is an accessor rather than a value:
+/// `bag.res.secretValue.at("DATABASE_URL")`. A bare `secretValue` is not a
+/// Resolvable and will not type-check against a consumer field — a forgotten
+/// `.at()` is a PKL error, not a resolution failure at apply time.
+open class SecretsResolvable extends formae.MapSecretResolvable {
     hidden type = "FLY::Apps::Secrets"
+
+    /// The values live on `decodedValues`, which Read populates and the author
+    /// never writes. `values` is the write side and is never echoed back.
+    hidden valueProperty = "decodedValues"
 
     hidden appName: SecretsResolvable = (this) { property = "appName" }
 }
@@ -446,20 +456,26 @@ open class SecretsResolvable extends formae.Resolvable {
 /// machine does not pick up a changed secret until it restarts** — the plugin
 /// does not restart machines for you, because a service interruption should
 /// not be an invisible side effect of a secret update.
-// Not extractable. `values` is write-only and the plugin never asks Fly to
-// reveal it, so an extracted Secrets bag would carry an appName and no values —
-// and Create rejects a bag with no values, so the extracted forma could not be
-// applied. Still discoverable: knowing the bag exists is useful even though its
-// contents cannot be reconstructed. Same reasoning as the AWS plugin applies to
-// resources whose create-only fields a Read can never populate.
+// Not extractable. Read reveals the bag onto `decodedValues`, but that field is
+// write-only and so is `values`, so an extracted bag would carry an appName and
+// nothing else — and Create rejects a bag with no values, so the extracted forma
+// could not be applied. Still discoverable: knowing the bag exists is useful even
+// though its contents cannot be reconstructed. Same reasoning as the AWS plugin
+// applies to resources whose create-only fields a Read can never populate.
 @formae.ResourceHint {
     type = "FLY::Apps::Secrets"
     identifier = "$.appName"
     discoverable = true
     extractable = false
 }
-class Secrets extends formae.Resource {
+class Secrets extends formae.Secret {
     fixed hidden type: String = "FLY::Apps::Secrets"
+
+    /// This resource's secret value is the decoded bag. Consumers reference an
+    /// entry as `bag.res.secretValue.at("KEY")`; the agent re-reads it from Fly
+    /// on every plugin call, so a value rotated out of band takes effect without
+    /// an apply.
+    hidden valueProperty = "decodedValues"
 
     local parent = this
     hidden res: SecretsResolvable = new {
@@ -494,15 +510,45 @@ class Secrets extends formae.Resource {
     /// a Mapping's value type. So on formae 0.89.0 a map-valued field cannot be
     /// marked opaque as a whole. Verified against the rendered schema Hints.
     /// `writeOnly` still applies and keeps the field out of drift detection.
-    /// An entry may also be a `formae.Resolvable`, which is what makes
-    /// cross-plugin wiring work: a credential produced by another plugin in the
-    /// same apply can be handed straight to Fly.
-    ///   ["SUPABASE_SECRET_KEY"] = secretKey.res.apiKey
+    ///
+    /// An entry is anything formae can supply — `formae.ValueSource` — which is
+    /// what makes cross-plugin wiring work. A credential produced by another
+    /// resource in the same apply goes straight in:
+    ///   ["SUPABASE_PROJECT_REF"] = db.res.id
+    /// A secret held by another provider is read live on every plugin call, so
+    /// rotating it upstream needs no re-apply here:
+    ///   ["DB_PASSWORD"] = dbSecret.res.secretValue
+    ///   ["API_KEY"]     = vaultSecret.res.secretValue.at("api-key")
+    /// And a generator binding lets formae draw the credential itself, once or
+    /// on a rotation cadence, moving this bag and everything else bound to it
+    /// together:
+    ///   ["SESSION_SECRET"] = sessionPw.gen.value
     /// formae orders the graph from the reference and substitutes the value at
-    /// apply time, so the credential never appears in this forma. A resolvable
+    /// apply time, so the credential never appears in this forma. A reference
     /// is a handle, not a string — pass it whole, never interpolated.
     @formae.FieldHint { writeOnly = true }
-    values: Mapping<String, (String|formae.Value|formae.Resolvable)>?
+    values: Mapping<String, (String|formae.ValueSource)>?
+
+    /// The bag as Fly holds it, name → value. Populated by Read alone: the
+    /// plugin asks the list endpoint to reveal the values
+    /// (`?show_secrets=true`) so this resource can answer
+    /// `bag.res.secretValue.at("KEY")`. Never authored — write `values`.
+    ///
+    /// Provider-populated, hence `hasProviderDefault`, and `writeOnly` so it
+    /// stays out of drift detection: this field exists to resolve references,
+    /// not to make a changed value look like drift. Reveal is scoped to Read;
+    /// discovery lists names only.
+    ///
+    /// The `formae.SecretValue` arm marks the field opaque, so the agent hashes
+    /// it at rest; `formae.Value` accepts the hashed envelope an extracted forma
+    /// would carry back. A token that may list secrets but not reveal them
+    /// leaves this absent, and only the `secretValue` accessor is lost.
+    ///
+    /// Entries Fly injects itself are reachable here too — notably the
+    /// `DATABASE_URL` that `FLY::Postgres::Attachment` writes, which formae
+    /// never authored and could not otherwise reference.
+    @formae.FieldHint { writeOnly = true; hasProviderDefault = true }
+    decodedValues: (Mapping<String, String>|formae.Value|formae.SecretValue)?
 }
 
 // =============================================================================
@@ -780,9 +826,26 @@ class SecretKey extends formae.Resource {
     ///
     /// Omit it and Fly generates the key, which is the safer default and what
     /// most callers want; supplying it means the material exists somewhere
-    /// outside Fly. Wrap it in `formae.value(x).opaque` if you do.
+    /// outside Fly.
+    ///
+    /// The `formae.ValueSource` arm carries `formae.SecretValue`, which is what
+    /// makes the field opaque in its rendered FieldHint: the agent hashes the
+    /// value at rest whatever form the author supplied it in, so a bare string
+    /// literal is as safe here as `formae.value(x).opaque` and the explicit
+    /// `.opaque` is now redundant. The same arm accepts a secret held by
+    /// another provider,
+    ///   value = vaultSecret.res.secretValue
+    /// read live on every plugin call, so rotating it upstream needs no
+    /// re-apply here.
+    ///
+    /// A generator binding (`pw.gen.value`, `keys.gen.privateKey`) type-checks
+    /// too, but read the encoding first: Fly wants base64 of raw key material
+    /// sized for `keyType`, and neither generator emits that — PasswordGenerator
+    /// draws a plain random string and KeyPairGenerator a PEM. Supplying either
+    /// unmodified answers 400. Omitting `value` and letting Fly generate the
+    /// key remains the right default.
     @formae.FieldHint { writeOnly = true }
-    value: (String|formae.Value)?
+    value: (String|formae.ValueSource)?
 
     /// Base64 public key, present only for asymmetric types (nacl_box, nacl_sign,
     /// es256). Output only. The spec declares this an array of integers; the API

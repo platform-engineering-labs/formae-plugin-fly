@@ -22,7 +22,7 @@ DEFAULT_TIMEOUT := 30
 
 # Formae agent version the conformance harness runs against. Unset means "the
 # latest published release", which is what CI should use. Pin it with
-# VERSION=0.88.1 to reproduce a specific run. Note the harness rewrites the
+# VERSION=0.89.0 to reproduce a specific run. Note the harness rewrites the
 # schema and testdata PklProject files to match this version for the duration of
 # the run, then restores them.
 #
@@ -125,7 +125,7 @@ clean-environment:
 	@./scripts/ci/clean-environment.sh
 
 ## conformance-test: Run all conformance tests (CRUD + discovery)
-## Usage: make conformance-test [TEST=machine] [TIMEOUT=15] [VERSION=0.88.1]
+## Usage: make conformance-test [TEST=machine] [TIMEOUT=15] [VERSION=0.89.0]
 ##
 ## TIMEOUT is in MINUTES, matching the convention the other plugins and the
 ## docs use. It sets the go-test deadline (with an "m" appended) and also
