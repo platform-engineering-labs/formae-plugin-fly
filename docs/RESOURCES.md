@@ -76,7 +76,7 @@ byte-identical 5-resource forks of the same `app/cert/ip/machine/volume` lineage
 | `tokens` (authenticate/authorize/current/kms/oidc) | 5 | 0 declarative — all runtime |
 | `apps` (list/create/get/destroy) | 4 | declarative |
 | `ip_assignments` (list/assign/release) | 3 | declarative |
-| `orgs` (`/v1/orgs/{slug}/machines`, `/volumes` — cross-app listing) | 2 | read-only, useful for discovery |
+| `orgs` (`/v1/orgs/{slug}/machines`, `/volumes` — cross-app listing) | 2 | read-only; `/volumes` drives volume discovery, `/machines` is unused — it lags recent creations by minutes |
 | `platform` (`/regions`, `/placements`) | 2 | read-only reference data |
 | `deploy_token` (mint an app-scoped deploy token) | 1 | runtime |
 | **Total** | **98** | **~54 declarative (55%), ~44 runtime (45%)** |

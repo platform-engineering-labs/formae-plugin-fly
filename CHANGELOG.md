@@ -9,6 +9,19 @@ versioning follows [semver](https://semver.org/spec/v2.0.0.html).
 
 First release. Requires formae 0.89.0 or newer.
 
+### Fixed
+
+- Machine discovery found nothing. `Machine.List` used
+  `GET /v1/orgs/{org}/machines`, which Fly documents as "a point in time" whose
+  "recent machine changes, including creations and destructions, may take time
+  to propagate" — in practice a machine created seconds earlier is absent from
+  it for minutes, so every discovery scan reported zero machines while `Read`
+  answered for the same machine immediately. `List` now fans out over the org's
+  apps and uses the per-app endpoint, which is immediately consistent. That is
+  N+1 requests instead of one, the same trade `Secrets.List` already makes.
+  Volume keeps the org-wide endpoint: it carries no such caveat and discovery
+  finds a fresh volume on the first scan.
+
 ### Adopted the formae 0.89.0 secret model
 
 - `FLY::Apps::Secrets.values` entries and `FLY::Apps::SecretKey.value` are typed
@@ -80,9 +93,10 @@ for any of them, so every field is `createOnly` and a change is a replacement.
 
 - Credential resolution matching flyctl exactly: `FLY_ACCESS_TOKEN`, then
   `FLY_API_TOKEN`.
-- Discovery for all six types. Machine and Volume use the org-wide endpoints
-  (one cursor-paged call); Secrets, Certificate and IPAddress fan out per app
-  because no org-wide endpoint exists.
+- Discovery for all six types. Volume uses the org-wide endpoint (one
+  cursor-paged call); Machine, Secrets, Certificate and IPAddress fan out per
+  app — for Machine because Fly's org-wide machine index lags recent creations
+  by minutes, for the others because no org-wide endpoint exists.
 - Conformance coverage — CRUD lifecycle and discovery — for App, Secrets,
   Machine, Volume, IPAddress and the whole Managed Postgres graph (cluster,
   database, user, extension, attachment) in one forma, so a single billable

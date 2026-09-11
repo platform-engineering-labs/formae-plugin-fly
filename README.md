@@ -97,8 +97,10 @@ target: formae.Target = new formae.Target {
 }
 ```
 
-`org` is required: listing apps (`GET /v1/apps?org_slug=`) and org-wide machine
-and volume discovery both need it, and it cannot be derived from a token.
+`org` is required: listing apps (`GET /v1/apps?org_slug=`) and org-wide volume
+discovery both need it, and it cannot be derived from a token. Machine discovery
+goes through the app list too — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+for why it does not use Fly's org-wide machine index.
 
 `region` is a default so a forma need not repeat it on every machine and volume;
 a resource-level `region` wins. The authoritative region list is public and

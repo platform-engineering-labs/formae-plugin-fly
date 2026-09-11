@@ -9,6 +9,7 @@ package apps
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae-plugin-fly/pkg/resources/registry"
@@ -351,45 +352,74 @@ func TestMachineStatusFallsBackToNativeID(t *testing.T) {
 
 // Discovery uses the org-wide endpoint: one call instead of one per app, which
 // is what keeps a large org inside the conformance harness's window.
-func TestMachineListUsesOrgEndpointAndPaginates(t *testing.T) {
+// Discovery fans out over the org's apps rather than using
+// GET /v1/orgs/{org}/machines. Fly documents that endpoint as "a point in time"
+// whose "recent machine changes, including creations and destructions, may take
+// time to propagate" — a machine created seconds ago is routinely absent from
+// it, which made every discovery run miss freshly created machines. The per-app
+// endpoint is the authoritative list and is immediately consistent, which is
+// why Read against it has always worked.
+func TestMachineListFansOutOverApps(t *testing.T) {
 	s := newStub(t, map[string]route{
-		"GET /v1/orgs/test-org/machines": {200, `{"machines":[
-			{"id":"m1","app_name":"one"},{"id":"m2","app_name":"two"},
-			{"id":"","app_name":"three"},{"id":"m4","app_name":""}],
-			"next_cursor":"cur2"}`},
+		"GET /v1/apps":              {200, `{"apps":[{"name":"one"},{"name":"two"}]}`},
+		"GET /v1/apps/one/machines": {200, `[{"id":"m1"},{"id":"m2"}]`},
+		"GET /v1/apps/two/machines": {200, `[{"id":"m3"}]`},
 	})
 	m := &Machine{Client: s.client(), Target: s.target()}
 	res, err := m.List(context.Background(), &resource.ListRequest{ResourceType: ResourceTypeMachine})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(res.NativeIDs) != 2 || res.NativeIDs[0] != "one/m1" || res.NativeIDs[1] != "two/m2" {
-		t.Errorf("NativeIDs = %v, want app-scoped ids for the two complete rows", res.NativeIDs)
+	want := []string{"one/m1", "one/m2", "two/m3"}
+	if len(res.NativeIDs) != len(want) {
+		t.Fatalf("NativeIDs = %v, want %v", res.NativeIDs, want)
 	}
-	if res.NextPageToken == nil || *res.NextPageToken != "cur2" {
-		t.Errorf("NextPageToken = %v, want cur2", res.NextPageToken)
+	for i, id := range want {
+		if res.NativeIDs[i] != id {
+			t.Errorf("NativeIDs[%d] = %q, want %q", i, res.NativeIDs[i], id)
+		}
 	}
-	if q := s.only().Query; q != "summary=true" {
-		t.Errorf("query = %q, want summary=true (discovery only needs ids)", q)
+	// The org-wide index is not consulted at all.
+	for _, c := range s.calls {
+		if strings.Contains(c.Path, "/orgs/") {
+			t.Errorf("called %s; the org-wide machine index is not trustworthy for discovery", c.Path)
+		}
+	}
+	// Discovery only needs ids, so the machine config is left on the wire.
+	for _, c := range s.calls {
+		if strings.HasSuffix(c.Path, "/machines") && c.Query != "summary=true" {
+			t.Errorf("%s query = %q, want summary=true", c.Path, c.Query)
+		}
 	}
 }
 
-func TestMachineListPassesCursor(t *testing.T) {
+// One app the token cannot read must not blank the whole scan.
+func TestMachineListSkipsUnreadableApps(t *testing.T) {
 	s := newStub(t, map[string]route{
-		"GET /v1/orgs/test-org/machines": {200, `{"machines":[{"id":"m9","app_name":"one"}]}`},
+		"GET /v1/apps":                 {200, `{"apps":[{"name":"one"},{"name":"denied"}]}`},
+		"GET /v1/apps/one/machines":    {200, `[{"id":"m1"}]`},
+		"GET /v1/apps/denied/machines": {403, `{"error":"insufficient scope"}`},
 	})
 	m := &Machine{Client: s.client(), Target: s.target()}
-	tok := "cur2"
-	res, err := m.List(context.Background(), &resource.ListRequest{PageToken: &tok})
+	res, err := m.List(context.Background(), &resource.ListRequest{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if res.NextPageToken != nil {
-		t.Errorf("NextPageToken = %v, want nil at the last page", *res.NextPageToken)
+	if len(res.NativeIDs) != 1 || res.NativeIDs[0] != "one/m1" {
+		t.Errorf("NativeIDs = %v, want just one/m1", res.NativeIDs)
 	}
-	q := s.only().Query
-	if q != "cursor=cur2&summary=true" {
-		t.Errorf("query = %q", q)
+}
+
+// A machine row without an id is unusable as a native id.
+func TestMachineListSkipsRowsWithoutAnID(t *testing.T) {
+	s := newStub(t, map[string]route{
+		"GET /v1/apps":              {200, `{"apps":[{"name":"one"}]}`},
+		"GET /v1/apps/one/machines": {200, `[{"id":""},{"id":"m2"}]`},
+	})
+	m := &Machine{Client: s.client(), Target: s.target()}
+	res, _ := m.List(context.Background(), &resource.ListRequest{})
+	if len(res.NativeIDs) != 1 || res.NativeIDs[0] != "one/m2" {
+		t.Errorf("NativeIDs = %v, want just one/m2", res.NativeIDs)
 	}
 }
 

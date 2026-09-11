@@ -431,11 +431,18 @@ holds no target state. (Same bug, same fix, same reasoning as the comment in
 `List()` per resource type:
 
 - **App** — `GET /v1/apps?org_slug={org}`. Requires `org` in target config.
-- **Machine** — `GET /v1/orgs/{org}/machines` in one call, rather than N calls of
-  `GET /v1/apps/{app}/machines` after listing apps. This exists specifically for
-  cross-app enumeration and keeps discovery inside the conformance harness's 2-minute
-  window on an org with many apps.
-- **Volume** — `GET /v1/orgs/{org}/volumes`, same reasoning.
+- **Machine** — list apps, then `GET /v1/apps/{app}/machines` per app.
+  `GET /v1/orgs/{org}/machines` would be one call instead of N and is what this did
+  first, but it cannot be used for discovery: Fly documents it as representing "a point
+  in time" where "recent machine changes, including creations and destructions, may take
+  time to propagate", and a machine created seconds earlier is in practice absent from it
+  for minutes. Conformance caught that as a hard failure — every discovery run polled for
+  two minutes and saw zero machines while `Read` answered for the same machine
+  immediately. The per-app endpoint is immediately consistent, which is why `Read` always
+  worked. N+1 requests is the price of an answer that is correct.
+- **Volume** — `GET /v1/orgs/{org}/volumes` in one call. The volumes endpoint carries no
+  such propagation caveat and discovery finds a freshly created volume on the first scan,
+  so it keeps the cheap path.
 - **Secrets / Certificate / IPAddress** — no org-wide endpoint. These fan out: list apps,
   then one call per app. On a large org that is slow, and it is the first thing to
   revisit if discovery times out.
@@ -451,8 +458,8 @@ Pagination is uneven across the API, so the plugin's handling is too:
 
 | Endpoint | Paginated? | What `List()` does |
 |----------|-----------|--------------------|
-| `GET /v1/orgs/{org}/machines` | yes — `cursor` + `limit` | passes formae's `PageToken` as `cursor`, returns `next_cursor` as `NextPageToken` |
-| `GET /v1/orgs/{org}/volumes` | yes — `cursor` + `limit` | same |
+| `GET /v1/orgs/{org}/volumes` | yes — `cursor` + `limit` | passes formae's `PageToken` as `cursor`, returns `next_cursor` as `NextPageToken` |
+| `GET /v1/apps/{app}/machines` | no — plain array | returns every machine of the app, nil `NextPageToken`; `List()` fans out over apps |
 | `GET /v1/apps/{app}/certificates` | yes — `cursor` + `limit` (default 25, max 500) | follows the cursor to the end inside one `List()` call |
 | `GET /v1/apps?org_slug=` | no | returns the whole array, nil `NextPageToken` |
 | `GET /v1/apps/{app}/secrets` | no | as above |
@@ -463,8 +470,8 @@ per-app cursor cannot be threaded through formae's single `PageToken`, so that l
 follows the cursor internally. Stopping at page one would report a partial answer, which
 discovery reads as "these are all the certificates" — and prunes the rest.
 
-Both org-wide calls also pass `summary=true`: discovery only needs native ids, and the
-full machine config per row is a large payload for nothing.
+The volume and machine listings both pass `summary=true`: discovery only needs native
+ids, and the full config per row is a large payload for nothing.
 
 ---
 
