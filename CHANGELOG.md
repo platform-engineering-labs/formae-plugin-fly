@@ -5,7 +5,7 @@ All notable changes to `formae-plugin-fly`.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [semver](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-09-11
 
 First release. Requires formae 0.89.0 or newer.
 
